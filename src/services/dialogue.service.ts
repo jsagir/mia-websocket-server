@@ -24,6 +24,7 @@ export interface DialogueState {
   lastIntent: string;
   hasAskedName: boolean;
   hasAskedAge: boolean;
+  hasAskedAboutVOL: boolean; // ⭐ NEW: Track if we asked about Village of Life
   userName: string | null;
   userAge: number | null;
 }
@@ -423,6 +424,7 @@ export class DialogueManager {
         lastIntent: 'greeting',
         hasAskedName: false,
         hasAskedAge: false,
+        hasAskedAboutVOL: false, // ⭐ NEW: Track VOL question
         userName: null,
         userAge: null
       });
@@ -533,6 +535,7 @@ export class DialogueManager {
     // Update user age if detected (informational only, doesn't change mode)
     if (userAge && !state.userAge) {
       state.userAge = userAge;
+      state.hasAskedAboutVOL = true; // ⭐ Mark that we're asking about VOL
       logger.info(`🎭 User age detected: ${userAge} (informational only)`);
 
       // ⭐ STAY IN MIRROR_LEARNING - just acknowledge age and ask about VOL
@@ -601,8 +604,39 @@ export class DialogueManager {
     context: any;
     promptAddition: string;
   } {
-    // If no current scenario, initiate one
+    // ⭐ GATE: Don't trigger scenarios until user has responded to VOL question
+    if (!state.hasAskedAboutVOL || state.conversationTurn <= 3) {
+      logger.info(`🎭 Not ready for scenarios yet (turn ${state.conversationTurn}, askedVOL: ${state.hasAskedAboutVOL})`);
+      return {
+        action: 'casual_chat_waiting',
+        context: {},
+        promptAddition: 'Respond naturally and briefly as Mia (2 sentences max). Stay in character.'
+      };
+    }
+
+    // ⭐ TRIGGER LOGIC: Only trigger scenarios for specific intents
+    const scenarioTriggerIntents = [
+      'medicine_topic',
+      'substance_concern',
+      'peer_pressure_topic',
+      'needs_help',
+      'vol_question'
+    ];
+
+    const shouldTriggerScenario = scenarioTriggerIntents.includes(intent);
+
+    // If no current scenario, decide whether to initiate one
     if (!state.currentScenario || state.mirrorLearningStep === 0) {
+      // Only trigger scenario if user mentions relevant topic
+      if (!shouldTriggerScenario) {
+        logger.info(`🎭 Intent "${intent}" doesn't trigger scenarios - casual chat`);
+        return {
+          action: 'casual_chat_no_trigger',
+          context: {},
+          promptAddition: 'Respond naturally as Mia (2 sentences max). Stay friendly and in character.'
+        };
+      }
+
       const scenario = this.selectScenario(state.userAge, state.lastIntent, state.scenariosCompleted);
 
       if (!scenario) {
