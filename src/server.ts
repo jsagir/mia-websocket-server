@@ -109,32 +109,54 @@ io.on('connection', (socket: AuthenticatedSocket) => {
       // Get conversation history
       const history = sessionService.getHistory(session.sessionId);
 
-      // Send message to OpenAI and stream response
-      const stream = await miaService.sendMessage(userId, session.sessionId, message, history);
+      // Send message to Mia and stream response
+      const stream = await miaService.sendMessage({
+        userId,
+        sessionId: session.sessionId,
+        message,
+        conversationHistory: history,
+      });
 
       let fullResponse = '';
 
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        if (content) {
-          fullResponse += content;
-          socket.emit('message_chunk', {
+      stream
+        .on('textCreated', () => {
+          logger.info(`📝 Mia is responding...`);
+        })
+        .on('textDelta', (textDelta) => {
+          const content = textDelta.value || '';
+          if (content) {
+            fullResponse += content;
+            socket.emit('message_chunk', {
+              sessionId: session.sessionId,
+              chunk: content,
+            });
+          }
+        })
+        .on('textDone', async () => {
+          logger.info(`✅ Response complete (${fullResponse.length} chars)`);
+
+          await sessionService.addMessage(
+            session.sessionId,
+            'assistant',
+            fullResponse
+          );
+
+          socket.emit('message_complete', {
             sessionId: session.sessionId,
-            chunk: content
+            message: fullResponse,
           });
-        }
-      }
 
-      // Add assistant message to history
-      sessionService.addMessage(session.sessionId, 'assistant', fullResponse);
-
-      // Send completion signal
-      socket.emit('message_complete', {
-        sessionId: session.sessionId,
-        message: fullResponse
-      });
-
-      logger.info(`Completed message streaming for session ${session.sessionId}`);
+          logger.info(`Completed message streaming for session ${session.sessionId}`);
+        })
+        .on('error', (error) => {
+          logger.error('❌ Stream error:', error);
+          socket.emit('error', {
+            sessionId: session.sessionId,
+            message: 'Stream error occurred',
+            error: error.message,
+          });
+        });
     } catch (error) {
       logger.error(`Error processing message: ${error}`);
       socket.emit('error', {
