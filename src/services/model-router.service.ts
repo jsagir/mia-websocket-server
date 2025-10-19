@@ -151,13 +151,13 @@ export class ModelRouterService {
       case 'gpt-4o-empathy':
         return {
           temperature: 0.8, // More creative, warmer, emotional
-          maxTokens: 500     // Mia's responses are short (2 sentences)
+          maxTokens: 800     // 2-3 casual OR 5-6 scenario sentences
         };
 
       case 'gpt-4o-safety':
         return {
           temperature: 0.6, // More focused, logical, consistent
-          maxTokens: 800     // May need longer for crisis resources
+          maxTokens: 1000    // Crisis resources + explanations need more space
         };
     }
   }
