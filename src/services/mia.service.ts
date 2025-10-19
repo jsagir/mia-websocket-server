@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { logger } from '../utils/logger';
+import { pineconeContextService, ConversationContext } from './pinecone-context.service';
 
 export class MIAService {
   private client: OpenAI;
@@ -50,18 +51,65 @@ export class MIAService {
     sessionId: string;
     message: string;
     conversationHistory: Array<{ role: string; content: string }>;
-    dialogueContext?: string; // ⭐ NEW: Dialogue-driven instruction
+    dialogueContext?: string; // ⭐ Dialogue-driven instruction
+    age?: number; // ⭐ User age for context-based routing
+    mode?: string; // ⭐ Conversation mode (CONTEXT_BASED, ADULT, URGENCY)
   }) {
     try {
       await this.initializationPromise;
 
       logger.info(`📤 Sending message to Mia (Assistant: ${this.assistantId})`);
 
+      // ⭐ CONTEXT-BASED PINECONE ENRICHMENT
+      let pineconeContext = '';
+      if (pineconeContextService.isEnabled() && params.age && params.mode) {
+        // Detect emotional state and keywords
+        const emotionalState = pineconeContextService.detectEmotionalState(params.message);
+        const keywords = pineconeContextService.extractKeywords(params.message);
+        const safetyTier = this.detectSafetyTier(params.message);
+
+        // Build conversation context
+        const context: ConversationContext = {
+          conversationMode: params.mode as 'CONTEXT_BASED' | 'ADULT' | 'URGENCY',
+          age: params.age,
+          emotionalState,
+          keywords,
+          safetyTier,
+        };
+
+        logger.info(`🔍 Pinecone Context:`, {
+          mode: context.conversationMode,
+          age: context.age,
+          emotionalState: context.emotionalState,
+          keywords: context.keywords,
+        });
+
+        // Search for relevant context
+        const results = await pineconeContextService.cascadingSearch(
+          params.message,
+          context,
+          3 // Top 3 most relevant contexts
+        );
+
+        if (results.length > 0) {
+          pineconeContext = '\n\n[RELEVANT CONTEXT FROM KNOWLEDGE BASE]\n' +
+            results.map((r, i) => `${i + 1}. ${r.text?.substring(0, 500) || ''}`).join('\n\n') +
+            '\n[END CONTEXT]';
+
+          logger.info(`🔍 Added ${results.length} context results from Pinecone`);
+        }
+      }
+
       // Build the final user message with dialogue context guidance
       let finalMessage = params.message;
       if (params.dialogueContext) {
         finalMessage = `${params.message}\n\n[DIALOGUE INSTRUCTION: ${params.dialogueContext}]`;
         logger.info(`🎭 Dialogue Context Applied: ${params.dialogueContext}`);
+      }
+
+      // Add Pinecone context if available
+      if (pineconeContext) {
+        finalMessage += pineconeContext;
       }
 
       // Create thread with vector store attached

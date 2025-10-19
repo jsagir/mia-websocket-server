@@ -7,7 +7,9 @@
     "build": "tsc",
     "dev": "ts-node src/server.ts",
     "start": "node dist/server.js",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "migrate:pinecone:dry": "ts-node src/scripts/migrate-pinecone-context.ts",
+    "migrate:pinecone": "ts-node src/scripts/migrate-pinecone-context.ts --execute"
   },
   "keywords": [
     "websocket",

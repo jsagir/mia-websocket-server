@@ -136,6 +136,8 @@ io.on('connection', (socket: AuthenticatedSocket) => {
         message,
         conversationHistory: history,
         dialogueContext: dialogueAction.promptAddition, // ⭐ Guide GPT-4o's response
+        age: currentAge || undefined, // ⭐ Pass age for context-based Pinecone routing
+        mode: mode || undefined, // ⭐ Pass mode for context-based Pinecone routing
       });
 
       let fullResponse = '';
