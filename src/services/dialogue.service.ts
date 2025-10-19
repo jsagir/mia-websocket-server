@@ -10,7 +10,7 @@ export interface Scenario {
   dilemma: string;
   questions: string[];
   learningObjective: string;
-  ageRange: [number, number];
+  ageRange: [number, number]; // ⭐ Informational only - NOT used for filtering
 }
 
 // Dialogue state for each session
@@ -415,7 +415,7 @@ export class DialogueManager {
     if (!this.states.has(sessionId)) {
       this.states.set(sessionId, {
         sessionId,
-        currentMode: 'GREETING',
+        currentMode: 'MIRROR_LEARNING', // ⭐ ALWAYS start with Mirror Learning
         mirrorLearningStep: 0,
         currentScenario: null,
         scenariosCompleted: [],
@@ -460,34 +460,36 @@ export class DialogueManager {
     return 'casual_chat';
   }
 
-  // Select scenario based on user age and conversation context
+  // Select scenario based on conversation context ONLY (not age)
   selectScenario(age: number | null, lastIntent: string, completedScenarios: string[]): Scenario | null {
-    if (!age || age < 5 || age > 12) return null;
-
-    // Filter scenarios by age appropriateness
+    // ⭐ NO AGE FILTERING - all scenarios available regardless of age
     const availableScenarios = SCENARIO_BANK.filter(s =>
-      age >= s.ageRange[0] &&
-      age <= s.ageRange[1] &&
       !completedScenarios.includes(s.id)
     );
 
     if (availableScenarios.length === 0) return null;
 
-    // Match scenario to intent
+    // ⭐ CONTEXT-AWARE: Match scenario to conversation intent/topic
     let filteredScenarios = availableScenarios;
 
-    if (lastIntent === 'medicine_topic') {
+    if (lastIntent === 'medicine_topic' || lastIntent === 'substance_concern') {
+      // Lessons 1 & 2: Wellness and Medication Safety
       filteredScenarios = availableScenarios.filter(s => s.lesson === 1 || s.lesson === 2);
     } else if (lastIntent === 'peer_pressure_topic') {
+      // Lesson 3: Decision Making
       filteredScenarios = availableScenarios.filter(s => s.lesson === 3);
     } else if (lastIntent === 'needs_help') {
+      // Lesson 6: Help & Response
       filteredScenarios = availableScenarios.filter(s => s.lesson === 6);
+    } else if (lastIntent === 'vol_question') {
+      // Any scenario related to Village of Life
+      filteredScenarios = availableScenarios;
     }
 
-    // If no matches, use any available scenario
+    // If no context matches, use any available scenario
     if (filteredScenarios.length === 0) filteredScenarios = availableScenarios;
 
-    // Return random scenario from filtered list
+    // Return random scenario from context-filtered list
     return filteredScenarios[Math.floor(Math.random() * filteredScenarios.length)];
   }
 
@@ -528,43 +530,20 @@ export class DialogueManager {
       };
     }
 
-    // Update user age if detected
+    // Update user age if detected (informational only, doesn't change mode)
     if (userAge && !state.userAge) {
       state.userAge = userAge;
+      logger.info(`🎭 User age detected: ${userAge} (informational only)`);
 
-      // Switch to appropriate mode
-      if (userAge >= 5 && userAge <= 12) {
-        state.currentMode = 'MIRROR_LEARNING';
-        logger.info(`🎭 Switched to MIRROR_LEARNING mode for age ${userAge}`);
-
-        return {
-          action: 'start_mirror_learning',
-          context: { age: userAge, userName: state.userName },
-          promptAddition: `Respond with: "Hey ${state.userName}, did you just come from the Village of Life? Which station did you go to? I wanna know what you learned!" (Exactly this)`
-        };
-      } else if (userAge >= 13 && userAge <= 17) {
-        state.currentMode = 'EDUCATIONAL';
-        return {
-          action: 'educational_mode',
-          context: { age: userAge },
-          promptAddition: `Respond with: "Oh wow, you're ${userAge}! Are you learning about the Village of Life?"`
-        };
-      } else {
-        state.currentMode = 'EDUCATIONAL';
-        return {
-          action: 'educational_mode',
-          context: { age: userAge },
-          promptAddition: `Respond briefly about the Village of Life program (2 sentences max)`
-        };
-      }
+      // ⭐ STAY IN MIRROR_LEARNING - just acknowledge age and ask about VOL
+      return {
+        action: 'acknowledge_age',
+        context: { age: userAge, userName: state.userName },
+        promptAddition: `Respond with: "Hey ${state.userName}, did you just come from the Village of Life? Which station did you go to? I wanna know what you learned!" (Exactly this)`
+      };
     }
 
-    // Handle Mirror Learning flow
-    if (state.currentMode === 'MIRROR_LEARNING') {
-      return this.handleMirrorLearning(state, intent, message);
-    }
-
-    // Handle other modes
+    // ⭐ CRISIS always overrides everything
     if (intent === 'crisis') {
       return {
         action: 'crisis_response',
@@ -573,6 +552,7 @@ export class DialogueManager {
       };
     }
 
+    // ⭐ Handle EXPLICIT mode switches (user requests)
     if (intent === 'urgency') {
       state.currentMode = 'URGENCY';
       return {
@@ -582,11 +562,37 @@ export class DialogueManager {
       };
     }
 
-    // Default casual response
+    if (intent === 'fundraising') {
+      state.currentMode = 'FUNDRAISING';
+      return {
+        action: 'fundraising_mode',
+        context: {},
+        promptAddition: 'Respond with: "Are you someone who might help build more Villages? I really hope so..." Then share impact stories (3 sentences max)'
+      };
+    }
+
+    // ⭐ MIRROR LEARNING is the default flow
+    if (state.currentMode === 'MIRROR_LEARNING') {
+      return this.handleMirrorLearning(state, intent, message);
+    }
+
+    // ⭐ Handle other explicit modes (URGENCY, FUNDRAISING, EDUCATIONAL)
+    // If in these modes, respond accordingly but allow return to Mirror Learning
+    if (state.currentMode === 'URGENCY' || state.currentMode === 'FUNDRAISING') {
+      // After one response, return to Mirror Learning
+      state.currentMode = 'MIRROR_LEARNING';
+      return {
+        action: 'return_to_mirror_learning',
+        context: {},
+        promptAddition: 'Respond briefly to their question (2 sentences), then ask: "Do you have other questions about the Village of Life?"'
+      };
+    }
+
+    // Default casual response in Mirror Learning voice
     return {
       action: 'casual_response',
       context: {},
-      promptAddition: 'Respond naturally as Mia in 2 sentences or less'
+      promptAddition: 'Respond naturally as Mia in 2 sentences or less, staying in character'
     };
   }
 
