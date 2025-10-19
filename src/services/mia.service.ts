@@ -26,7 +26,7 @@ export class MIAService {
 
   private async initializeAssistant() {
     try {
-      logger.info('🔄 Creating Mia Assistant with vector stores...');
+      logger.info('🔄 Creating Mia Assistant...');
 
       const assistant = await this.client.beta.assistants.create({
         name: 'Mia Elena Kruse',
@@ -34,21 +34,17 @@ export class MIAService {
         temperature: 0.7,
         instructions: this.getMiaSystemPrompt(),
         tools: [{ type: 'file_search' }],
-        tool_resources: {
-          file_search: {
-            vector_store_ids: this.vectorStoreIds,
-          },
-        },
+        // Note: Vector stores attached to threads, not assistant
       });
 
       this.assistantId = assistant.id;
       logger.info(`✅ Mia Assistant created: ${this.assistantId}`);
-      logger.info(`📚 Connected to ${this.vectorStoreIds.length} vector stores:`);
-      logger.info(`   - Core Identity of MIA`);
-      logger.info(`   - MIA_STORYCRAFT`);
-      logger.info(`   - METHODOLOGY & MODES`);
-      logger.info(`   - SCENARIO BANK`);
-      logger.info(`   - MIA - VOL - Chatbot`);
+      logger.info(`📚 Vector stores will be attached to each thread:`);
+      logger.info(`   - Core Identity of MIA (118 KB)`);
+      logger.info(`   - MIA_STORYCRAFT (159 KB)`);
+      logger.info(`   - METHODOLOGY & MODES (97 KB)`);
+      logger.info(`   - SCENARIO BANK (206 KB)`);
+      logger.info(`   - MIA - VOL - Chatbot (295 KB)`);
     } catch (error) {
       logger.error('❌ Failed to create assistant:', error);
       throw error;
@@ -66,6 +62,7 @@ export class MIAService {
 
       logger.info(`📤 Sending message to Mia (Assistant: ${this.assistantId})`);
 
+      // Create thread with all 5 vector stores attached
       const thread = await this.client.beta.threads.create({
         messages: [
           ...params.conversationHistory.map(msg => ({
@@ -77,9 +74,14 @@ export class MIAService {
             content: params.message,
           },
         ],
+        tool_resources: {
+          file_search: {
+            vector_store_ids: this.vectorStoreIds,
+          },
+        },
       });
 
-      logger.info(`🧵 Thread created: ${thread.id}`);
+      logger.info(`🧵 Thread created: ${thread.id} with ${this.vectorStoreIds.length} vector stores`);
 
       const stream = this.client.beta.threads.runs.stream(thread.id, {
         assistant_id: this.assistantId,
