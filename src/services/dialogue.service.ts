@@ -579,6 +579,81 @@ export class DialogueManager {
     return selected;
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🛡️ GUARDRAILS: Safety and Quality Checks
+  // ═══════════════════════════════════════════════════════════════
+
+  private checkGuardrails(message: string, state: DialogueState): {
+    violation: boolean;
+    type: string;
+    action: string;
+  } | null {
+    const lower = message.toLowerCase();
+
+    // 1. SAFETY GUARDRAIL: Crisis keywords always override
+    const crisisPatterns = [
+      /\b(suicide|suicidal|kill myself|killing myself)\b/i,
+      /\b(want to die|wanna die|gonna die|end my life)\b/i,
+      /\b(self.?harm|cut myself|cutting myself|hurt myself)\b/i,
+      /\b(overdose|overdosing)\b/i,
+      /\b(abuse|abusing|abused|hitting me|hurting me|touching me)\b/i
+    ];
+
+    for (const pattern of crisisPatterns) {
+      if (pattern.test(lower)) {
+        logger.warn(`🛡️ GUARDRAIL TRIGGERED: Safety crisis detected`);
+        return {
+          violation: true,
+          type: 'safety_crisis',
+          action: 'immediate_crisis_response'
+        };
+      }
+    }
+
+    // 2. ENGAGEMENT GUARDRAIL: Very short/dismissive responses during scenarios
+    if (state.currentScenario && state.teachingStep > 0) {
+      const wordCount = message.trim().split(/\s+/).length;
+      if (wordCount === 1 && /^(ok|yeah|no|idk|k|sure)$/i.test(message.trim())) {
+        logger.warn(`🛡️ GUARDRAIL TRIGGERED: Disengagement detected`);
+        return {
+          violation: true,
+          type: 'disengagement',
+          action: 'encourage_engagement'
+        };
+      }
+    }
+
+    // 3. INAPPROPRIATE CONTENT GUARDRAIL: Explicit/harmful content
+    const inappropriatePatterns = [
+      /\b(fuck|shit|bitch|damn)\b/i,
+      /\b(sex|sexual|porn|naked)\b/i,
+      /\b(hate you|stupid|dumb|idiot)\b/i
+    ];
+
+    for (const pattern of inappropriatePatterns) {
+      if (pattern.test(lower)) {
+        logger.warn(`🛡️ GUARDRAIL TRIGGERED: Inappropriate content`);
+        return {
+          violation: true,
+          type: 'inappropriate_content',
+          action: 'gentle_redirect'
+        };
+      }
+    }
+
+    // 4. AGE MISMATCH GUARDRAIL: Adult talking to child mode
+    if (state.currentMode === 'CONTEXT_BASED' && state.userAge && state.userAge >= 18) {
+      logger.warn(`🛡️ GUARDRAIL TRIGGERED: Age mismatch (18+ in child mode)`);
+      return {
+        violation: true,
+        type: 'age_mismatch',
+        action: 'switch_to_adult_mode'
+      };
+    }
+
+    return null; // No violations
+  }
+
   // Process user message and return dialogue action
   async processMessage(sessionId: string, message: string, userAge: number | null, conversationHistory: Array<{ role: string; content: string }>): Promise<{
     action: string;
@@ -587,6 +662,41 @@ export class DialogueManager {
   }> {
     const state = this.getState(sessionId);
     state.conversationTurn++;
+
+    // 🛡️ RUN GUARDRAILS FIRST
+    const guardrailCheck = this.checkGuardrails(message, state);
+    if (guardrailCheck) {
+      switch (guardrailCheck.type) {
+        case 'safety_crisis':
+          return {
+            action: 'crisis_response',
+            context: { tier: 3, guardrail: true },
+            promptAddition: 'SAFETY TIER 3 (GUARDRAIL): Respond with crisis support (3-4 sentences) and provide: 988 Suicide & Crisis Lifeline, Text HELLO to 741741, 911 if immediate danger. Prioritize safety above all.'
+          };
+
+        case 'disengagement':
+          return {
+            action: 'encourage_engagement',
+            context: { guardrail: true },
+            promptAddition: 'They seem disengaged. Gently encourage them: "Hey, I really want to hear what you think about this. It helps me figure this out." Be warm and understanding. 2-3 sentences.'
+          };
+
+        case 'inappropriate_content':
+          return {
+            action: 'gentle_redirect',
+            context: { guardrail: true },
+            promptAddition: 'They used inappropriate language. Respond as a 10-year-old would: "Whoa, okay... Can we talk about something else?" Stay in character, don\'t lecture. 2 sentences.'
+          };
+
+        case 'age_mismatch':
+          state.currentMode = 'ADULT';
+          return {
+            action: 'switch_mode',
+            context: { newMode: 'ADULT', guardrail: true },
+            promptAddition: 'Switch to ADULT mode. Acknowledge they\'re an adult and ask if they want to learn about Village of Life program. 2-3 sentences.'
+          };
+      }
+    }
 
     // Detect intent
     const intent = this.detectIntent(message, state);
@@ -724,41 +834,24 @@ export class DialogueManager {
       'vol_question'
     ];
 
-    // ⭐ IMPROVED GATE: Wait longer before auto-triggering scenarios
-    // Turn 1: "hi", Turn 2: "jonathan", Turn 3: "9", Turn 4: "pharmacy", Turn 5: "label reading", Turn 6+: Ready
-    if (!state.hasAskedAboutVOL || state.conversationTurn <= 6) {
-      logger.info(`🎭 Not ready for scenarios yet (turn ${state.conversationTurn}, askedVOL: ${state.hasAskedAboutVOL})`);
-      return {
-        action: 'casual_chat_waiting',
-        context: {},
-        promptAddition: 'Respond naturally and briefly as Mia (2 sentences max). Stay in character. Build rapport.'
-      };
-    }
-
-    // ⭐ ADDITIONAL CHECK: Don't trigger scenarios immediately after VOL discussion (turns 6-7)
-    if (state.conversationTurn <= 7 && !scenarioTriggerIntents.includes(intent)) {
-      logger.info(`🎭 Building rapport - not triggering scenarios yet (turn ${state.conversationTurn})`);
-      return {
-        action: 'casual_chat_building_rapport',
-        context: {},
-        promptAddition: 'Chat naturally about what they said. Be curious and friendly. 2 sentences max. Don\'t start scenarios yet.'
-      };
-    }
-
-    const shouldTriggerScenario = scenarioTriggerIntents.includes(intent);
+    // ⭐ PROACTIVE SCENARIO TRIGGER: After VOL acknowledgment (turn 5+), actively guide toward scenarios
+    // For children (ages 5-17), don't wait passively - push toward Mirror Learning
+    const isReadyForScenarios = state.hasAskedAboutVOL && state.conversationTurn >= 6;
+    const shouldTriggerScenario = scenarioTriggerIntents.includes(intent) || isReadyForScenarios;
 
     // If no current scenario, decide whether to initiate one
     if (!state.currentScenario || state.teachingStep === 0) {
-      // Only trigger scenario if user mentions relevant topic
+      // ⭐ PROACTIVE: After turn 6, always try to find a relevant scenario based on conversation context
       if (!shouldTriggerScenario) {
-        logger.info(`🎭 Intent "${intent}" doesn't trigger scenarios - casual chat`);
+        logger.info(`🎭 Turn ${state.conversationTurn}: Intent "${intent}" - continuing casual chat before next scenario`);
         return {
           action: 'casual_chat_no_trigger',
           context: {},
-          promptAddition: 'Respond naturally as Mia (2 sentences max). Stay friendly and in character.'
+          promptAddition: 'Respond naturally as Mia (2-3 sentences). After this response, think about sharing a relevant experience from your life related to what they learned at VOL.'
         };
       }
 
+      logger.info(`🎭 Turn ${state.conversationTurn}: Ready to trigger scenario - searching for relevant match...`);
       const scenario = await this.selectScenario(state.userAge, state.lastIntent, state.scenariosCompleted, conversationHistory);
 
       if (!scenario) {
@@ -774,11 +867,11 @@ export class DialogueManager {
 
       logger.info(`🎭 Starting scenario ${scenario.id}: "${scenario.title}"`);
 
-      // Step 1: Context
+      // Step 1: Context - Present scenario naturally (longer, more detailed)
       return {
         action: 'ml_step_1_context',
         context: { scenario: scenario.id, step: 1 },
-        promptAddition: `Present this scenario context (exactly as written): "${scenario.context}" (Then wait for their response)`
+        promptAddition: `Share this experience from your life naturally (connect it to what they learned at VOL if possible): "${scenario.context}" Then present your dilemma: "${scenario.dilemma}" Use up to 10 sentences. Be vulnerable, authentic, and detailed. Paint the picture. Wait for their response.`
       };
     }
 
@@ -787,42 +880,51 @@ export class DialogueManager {
 
     switch (state.teachingStep) {
       case 1:
-        // Step 2: Dilemma
+        // Step 2: First Question (context + dilemma already presented in step 1)
         state.teachingStep = 2;
         return {
-          action: 'ml_step_2_dilemma',
+          action: 'ml_step_2_question',
           context: { scenario: scenario.id, step: 2 },
-          promptAddition: `Say: "${scenario.dilemma}" (Then ask the first question: "${scenario.questions[0]}")`
+          promptAddition: `Ask for their help with the first question: "${scenario.questions[0]}" Show genuine curiosity about what they think. 3-4 sentences.`
         };
 
       case 2:
-        // Step 3-4: Questions and wait for teaching
-        if (state.conversationTurn % 2 === 0) {
-          const questionIndex = Math.min(Math.floor(state.conversationTurn / 2) - 1, scenario.questions.length - 1);
-          return {
-            action: 'ml_step_3_question',
-            context: { scenario: scenario.id, step: 3, questionIndex },
-            promptAddition: `React to their answer authentically (1 sentence), then ask: "${scenario.questions[questionIndex]}"`
-          };
-        } else {
-          state.teachingStep = 3;
-          return {
-            action: 'ml_step_5_react',
-            context: { scenario: scenario.id, step: 5 },
-            promptAddition: `React authentically to their teaching (as a 10-year-old would). Show you understand. 2 sentences max.`
-          };
-        }
+        // Step 3: Second Question - Dig deeper
+        state.teachingStep = 3;
+        return {
+          action: 'ml_step_3_question_2',
+          context: { scenario: scenario.id, step: 3 },
+          promptAddition: `React to their first answer authentically (2-3 sentences), then ask the second question: "${scenario.questions[1]}" Be genuinely curious. Total 4-5 sentences.`
+        };
 
       case 3:
-        // Step 6: Apply teaching
+        // Step 4: Third Question - Explore implications
         state.teachingStep = 4;
         return {
-          action: 'ml_step_6_apply',
-          context: { scenario: scenario.id, step: 6 },
-          promptAddition: `Show how you'll apply their advice. Example: "So next time Marcus offers pills, I'll say no and tell Grandma." (2 sentences)`
+          action: 'ml_step_4_question_3',
+          context: { scenario: scenario.id, step: 4 },
+          promptAddition: `React thoughtfully to their second answer (2-3 sentences), then ask: "${scenario.questions[2]}" Show you're thinking deeply about this. Total 4-5 sentences.`
         };
 
       case 4:
+        // Step 5: Process their teaching
+        state.teachingStep = 5;
+        return {
+          action: 'ml_step_5_process',
+          context: { scenario: scenario.id, step: 5 },
+          promptAddition: `React authentically to all their teaching (as a 10-year-old would). Show you understand and appreciate their wisdom. Summarize what you learned from them. 5-6 sentences.`
+        };
+
+      case 5:
+        // Step 6: Apply teaching with specific example
+        state.teachingStep = 6;
+        return {
+          action: 'ml_step_6_apply',
+          context: { scenario: scenario.id, step: 6 },
+          promptAddition: `Show how you'll apply their advice with a concrete example from your life. Example: "So next time Marcus offers pills, I'll say no and tell Grandma." Be specific and personal. 4-5 sentences.`
+        };
+
+      case 6:
         // Step 7: Gratitude and complete
         state.teachingStep = 0;
         state.scenariosCompleted.push(scenario.id);
@@ -833,7 +935,7 @@ export class DialogueManager {
         return {
           action: 'ml_step_7_gratitude',
           context: { scenario: scenario.id, step: 7, completed: true },
-          promptAddition: `Thank them genuinely: "Thank you so much for helping me! You taught me [key lesson]." (2 sentences, then transition to casual chat)`
+          promptAddition: `Thank them genuinely and specifically. Say what you learned from them and how it helps you feel more confident. Then naturally transition to casual conversation or ask if they want to talk about something else. 4-5 sentences total.`
         };
 
       default:

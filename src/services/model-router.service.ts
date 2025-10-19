@@ -151,7 +151,7 @@ export class ModelRouterService {
       case 'gpt-4o-empathy':
         return {
           temperature: 0.8, // More creative, warmer, emotional
-          maxTokens: 800     // 2-3 casual OR 5-6 scenario sentences
+          maxTokens: 1200    // UP TO 10 sentences for scenario presentation, 4-6 for dialogue
         };
 
       case 'gpt-4o-safety':
