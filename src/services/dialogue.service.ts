@@ -489,8 +489,8 @@ export class DialogueManager {
       logger.warn('⚠️ Pinecone returned no match - falling back to context-based selection');
     }
 
-    // ⭐ FALLBACK: Context-based selection (original logic)
-    logger.info('📋 Using context-based scenario selection (fallback)');
+    // ⭐ IMPROVED FALLBACK: Keyword-based scenario selection
+    logger.info('📋 Using keyword-based scenario selection (Pinecone fallback)');
 
     // NO AGE FILTERING - all scenarios available regardless of age
     const availableScenarios = SCENARIO_BANK.filter(s =>
@@ -499,25 +499,61 @@ export class DialogueManager {
 
     if (availableScenarios.length === 0) return null;
 
-    // CONTEXT-AWARE: Match scenario to conversation intent/topic
+    // ⭐ Extract keywords from recent conversation
+    const recentMessages = conversationHistory.slice(-3).map(m => m.content.toLowerCase()).join(' ');
+    const keywords = this.extractScenarioKeywords(recentMessages);
+
+    logger.info(`🔍 Fallback keywords detected: ${keywords.join(', ')}`);
+
+    // ⭐ KEYWORD-BASED MATCHING: Find scenarios that match conversation keywords
     let filteredScenarios = availableScenarios;
 
-    if (lastIntent === 'medicine_topic' || lastIntent === 'substance_concern') {
+    // Specific keyword matching (higher priority)
+    if (keywords.includes('label') || keywords.includes('reading') || keywords.includes('bottle')) {
+      // L4: Label Reading scenarios
+      const labelScenarios = availableScenarios.filter(s => s.lesson === 4);
+      if (labelScenarios.length > 0) {
+        filteredScenarios = labelScenarios;
+        logger.info(`🎯 Matched keywords to LESSON 4: Label Reading scenarios`);
+      }
+    }
+    else if (keywords.includes('pharmacy') || keywords.includes('medicine') || keywords.includes('medication')) {
       // Lessons 1 & 2: Wellness and Medication Safety
       filteredScenarios = availableScenarios.filter(s => s.lesson === 1 || s.lesson === 2);
-    } else if (lastIntent === 'peer_pressure_topic') {
+      logger.info(`🎯 Matched keywords to LESSONS 1-2: Wellness/Medication Safety`);
+    }
+    else if (keywords.includes('peer') || keywords.includes('pressure') || keywords.includes('friend')) {
       // Lesson 3: Decision Making
       filteredScenarios = availableScenarios.filter(s => s.lesson === 3);
-    } else if (lastIntent === 'needs_help') {
+      logger.info(`🎯 Matched keywords to LESSON 3: Decision Making`);
+    }
+    else if (keywords.includes('danger') || keywords.includes('unsafe') || keywords.includes('stranger')) {
+      // Lesson 5: Danger Recognition
+      filteredScenarios = availableScenarios.filter(s => s.lesson === 5);
+      logger.info(`🎯 Matched keywords to LESSON 5: Danger Recognition`);
+    }
+    else if (keywords.includes('help') || keywords.includes('scared') || keywords.includes('911')) {
       // Lesson 6: Help & Response
       filteredScenarios = availableScenarios.filter(s => s.lesson === 6);
-    } else if (lastIntent === 'vol_question') {
-      // Any scenario related to Village of Life
-      filteredScenarios = availableScenarios;
+      logger.info(`🎯 Matched keywords to LESSON 6: Help & Response`);
+    }
+    // Fallback to intent-based matching
+    else if (lastIntent === 'medicine_topic' || lastIntent === 'substance_concern') {
+      filteredScenarios = availableScenarios.filter(s => s.lesson === 1 || s.lesson === 2);
+      logger.info(`🎯 Matched intent to LESSONS 1-2: Wellness/Medication Safety`);
+    } else if (lastIntent === 'peer_pressure_topic') {
+      filteredScenarios = availableScenarios.filter(s => s.lesson === 3);
+      logger.info(`🎯 Matched intent to LESSON 3: Decision Making`);
+    } else if (lastIntent === 'needs_help') {
+      filteredScenarios = availableScenarios.filter(s => s.lesson === 6);
+      logger.info(`🎯 Matched intent to LESSON 6: Help & Response`);
     }
 
-    // If no context matches, use any available scenario
-    if (filteredScenarios.length === 0) filteredScenarios = availableScenarios;
+    // If no matches, use any available scenario
+    if (filteredScenarios.length === 0) {
+      filteredScenarios = availableScenarios;
+      logger.info(`⚠️ No keyword/intent match - using random scenario`);
+    }
 
     // Return random scenario from context-filtered list
     const selected = filteredScenarios[Math.floor(Math.random() * filteredScenarios.length)];
@@ -618,6 +654,25 @@ export class DialogueManager {
 
     // ⭐ CONTEXT_BASED MODE: Dynamic, scenario-driven teaching (ages 5-17)
     if (state.currentMode === 'CONTEXT_BASED') {
+      // ⭐ NEW: Acknowledge VOL station response (turn 4)
+      if (state.conversationTurn === 4 && state.hasAskedAboutVOL) {
+        const volStation = this.extractVOLStation(message);
+        return {
+          action: 'acknowledge_vol_station',
+          context: { station: volStation },
+          promptAddition: `Respond naturally to their answer about the "${volStation}" station. Show interest and ask what they learned there. 2 sentences max. Be friendly and curious.`
+        };
+      }
+
+      // ⭐ NEW: Acknowledge what they learned (turn 5)
+      if (state.conversationTurn === 5 && state.hasAskedAboutVOL) {
+        return {
+          action: 'acknowledge_vol_learning',
+          context: { learning: message },
+          promptAddition: `React positively to what they learned: "${message}". Say something like "Nice!" or "That's important!" Then chat naturally about it. 2 sentences max. Don't trigger scenarios yet.`
+        };
+      }
+
       return await this.handleContextBasedTeaching(state, intent, message, conversationHistory);
     }
 
@@ -643,17 +698,7 @@ export class DialogueManager {
     context: any;
     promptAddition: string;
   }> {
-    // ⭐ GATE: Don't trigger scenarios until user has responded to VOL question
-    if (!state.hasAskedAboutVOL || state.conversationTurn <= 3) {
-      logger.info(`🎭 Not ready for scenarios yet (turn ${state.conversationTurn}, askedVOL: ${state.hasAskedAboutVOL})`);
-      return {
-        action: 'casual_chat_waiting',
-        context: {},
-        promptAddition: 'Respond naturally and briefly as Mia (2 sentences max). Stay in character.'
-      };
-    }
-
-    // ⭐ TRIGGER LOGIC: Only trigger scenarios for specific intents
+    // ⭐ TRIGGER LOGIC: Define scenario-triggering intents
     const scenarioTriggerIntents = [
       'medicine_topic',
       'substance_concern',
@@ -661,6 +706,27 @@ export class DialogueManager {
       'needs_help',
       'vol_question'
     ];
+
+    // ⭐ IMPROVED GATE: Wait longer before auto-triggering scenarios
+    // Turn 1: "hi", Turn 2: "jonathan", Turn 3: "9", Turn 4: "pharmacy", Turn 5: "label reading", Turn 6+: Ready
+    if (!state.hasAskedAboutVOL || state.conversationTurn <= 6) {
+      logger.info(`🎭 Not ready for scenarios yet (turn ${state.conversationTurn}, askedVOL: ${state.hasAskedAboutVOL})`);
+      return {
+        action: 'casual_chat_waiting',
+        context: {},
+        promptAddition: 'Respond naturally and briefly as Mia (2 sentences max). Stay in character. Build rapport.'
+      };
+    }
+
+    // ⭐ ADDITIONAL CHECK: Don't trigger scenarios immediately after VOL discussion (turns 6-7)
+    if (state.conversationTurn <= 7 && !scenarioTriggerIntents.includes(intent)) {
+      logger.info(`🎭 Building rapport - not triggering scenarios yet (turn ${state.conversationTurn})`);
+      return {
+        action: 'casual_chat_building_rapport',
+        context: {},
+        promptAddition: 'Chat naturally about what they said. Be curious and friendly. 2 sentences max. Don\'t start scenarios yet.'
+      };
+    }
 
     const shouldTriggerScenario = scenarioTriggerIntents.includes(intent);
 
@@ -779,6 +845,70 @@ export class DialogueManager {
       }
     }
     return null;
+  }
+
+  private extractVOLStation(message: string): string {
+    const lower = message.toLowerCase();
+    const stations = [
+      'pharmacy', 'medicine', 'medication',
+      'emergency', 'ambulance', '911',
+      'wellness', 'health', 'doctor',
+      'counseling', 'therapy', 'feelings',
+      'safety', 'danger', 'help',
+      'family', 'home', 'parents',
+      'art', 'drawing', 'painting',
+      'music', 'singing',
+      'sports', 'exercise'
+    ];
+
+    for (const station of stations) {
+      if (lower.includes(station)) {
+        // Normalize to main station names
+        if (['pharmacy', 'medicine', 'medication'].includes(station)) return 'pharmacy';
+        if (['emergency', 'ambulance', '911'].includes(station)) return 'emergency';
+        if (['wellness', 'health', 'doctor'].includes(station)) return 'wellness';
+        if (['counseling', 'therapy', 'feelings'].includes(station)) return 'counseling';
+        if (['safety', 'danger', 'help'].includes(station)) return 'safety';
+        if (['family', 'home', 'parents'].includes(station)) return 'family';
+        if (['art', 'drawing', 'painting'].includes(station)) return 'art';
+        if (['music', 'singing'].includes(station)) return 'music';
+        if (['sports', 'exercise'].includes(station)) return 'sports';
+        return station;
+      }
+    }
+    return 'a station';
+  }
+
+  private extractScenarioKeywords(text: string): string[] {
+    const keywords: string[] = [];
+    const lower = text.toLowerCase();
+
+    // Medicine/pharmacy keywords
+    if (/(medicine|medication|pills|pharmacy|prescription|dose|dosage)/i.test(lower)) {
+      keywords.push('medicine', 'medication', 'pharmacy');
+    }
+
+    // Label reading keywords
+    if (/(label|reading|bottle|warning|symbol|instructions)/i.test(lower)) {
+      keywords.push('label', 'reading', 'bottle');
+    }
+
+    // Peer pressure keywords
+    if (/(friend|peer|pressure|everyone|party)/i.test(lower)) {
+      keywords.push('peer', 'pressure', 'friend');
+    }
+
+    // Danger recognition keywords
+    if (/(danger|unsafe|stranger|weird|sketchy|suspicious)/i.test(lower)) {
+      keywords.push('danger', 'unsafe', 'stranger');
+    }
+
+    // Help & response keywords
+    if (/(help|scared|afraid|worried|911|emergency|crisis)/i.test(lower)) {
+      keywords.push('help', 'scared', '911');
+    }
+
+    return [...new Set(keywords)]; // Remove duplicates
   }
 
   // Get scenario by ID
