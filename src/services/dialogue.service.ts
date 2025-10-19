@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger';
 import { pineconeScenarioMatcher } from './pinecone.service';
+import { getFundraisingService, FundraisingTopic } from './fundraising.service';
 
 // Scenario definition
 export interface Scenario {
@@ -28,6 +29,11 @@ export interface DialogueState {
   hasAskedAboutVOL: boolean; // ⭐ Track if we asked about Village of Life
   userName: string | null;
   userAge: number | null;
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🆕 FUNDRAISING TRACKING (for ADULT mode)
+  // ═══════════════════════════════════════════════════════════════
+  fundraisingTopicsDiscussed: string[]; // Track which topics have been covered
 
   // ═══════════════════════════════════════════════════════════════
   // 🆕 REFLECTION BUFFER (In-Context Identity Architecture)
@@ -439,6 +445,7 @@ export class DialogueManager {
         hasAskedAboutVOL: false, // ⭐ Track VOL question
         userName: null,
         userAge: null,
+        fundraisingTopicsDiscussed: [], // ⭐ Track fundraising topics discussed (ADULT mode)
         // 🆕 Initialize reflection buffer
         reflectionBuffer: {
           emotionalState: 'neutral',
@@ -764,19 +771,50 @@ export class DialogueManager {
 
     // ⭐ Handle special requests (urgency, fundraising) - available in all modes
     if (intent === 'urgency') {
+      // ⭐ Use Fundraising Service for urgency content
+      const fundraisingService = getFundraisingService();
+      const urgencyContent = fundraisingService.getContent('urgency');
+
+      // Track urgency topic if in ADULT mode
+      if (state.currentMode === 'ADULT' && !state.fundraisingTopicsDiscussed.includes('urgency')) {
+        state.fundraisingTopicsDiscussed.push('urgency');
+      }
+
       return {
         action: 'urgency_response',
-        context: {},
-        promptAddition: 'Respond with: "You wanna know why we can\'t wait?" Then briefly explain urgency (3 sentences max, then return to normal conversation)'
+        context: { topic: 'urgency' },
+        promptAddition: `URGENCY RESPONSE:
+
+You're explaining why Village of Life is urgent. Stay in Mia's voice.
+
+Key content:
+${urgencyContent}
+
+Start with: "You wanna know why we can't wait?"
+Then share 2-3 key urgency points from above.
+End with gentle hope.
+
+LENGTH: 5-6 sentences.`
       };
     }
 
     if (intent === 'fundraising' && state.currentMode === 'ADULT') {
-      return {
-        action: 'fundraising_response',
-        context: {},
-        promptAddition: 'Respond with: "Are you someone who might help build more Villages? I really hope so..." Then share impact stories (3 sentences max)'
-      };
+      // ⭐ Use Fundraising Service for rich content
+      const fundraisingService = getFundraisingService();
+      const fundraisingResponse = fundraisingService.getFundraisingResponse(message, state.conversationTurn);
+
+      if (fundraisingResponse) {
+        // Track which topic was discussed
+        if (!state.fundraisingTopicsDiscussed.includes(fundraisingResponse.topic)) {
+          state.fundraisingTopicsDiscussed.push(fundraisingResponse.topic);
+        }
+
+        return {
+          action: 'fundraising_response',
+          context: { topic: fundraisingResponse.topic, topicsDiscussed: state.fundraisingTopicsDiscussed.length },
+          promptAddition: fundraisingResponse.promptAddition
+        };
+      }
     }
 
     // ⭐ CONTEXT_BASED MODE: Dynamic, scenario-driven teaching (ages 5-17)
@@ -805,10 +843,61 @@ export class DialogueManager {
 
     // ⭐ ADULT MODE: Educational content, fundraising, VOL explanation (ages 18+)
     if (state.currentMode === 'ADULT') {
+      const fundraisingService = getFundraisingService();
+
+      // Check if they're asking about a specific fundraising topic
+      const detectedTopic = fundraisingService.detectFundraisingTopic(message);
+
+      if (detectedTopic) {
+        // Track topic
+        if (!state.fundraisingTopicsDiscussed.includes(detectedTopic)) {
+          state.fundraisingTopicsDiscussed.push(detectedTopic);
+        }
+
+        const content = fundraisingService.getContent(detectedTopic);
+        const promptAddition = `FUNDRAISING MODE (ADULT):
+
+You are explaining the Village of Life program to an adult who might help build more Villages. Stay in Mia's voice — you're a 10-year-old who went through VOL and now helps other kids.
+
+Topic detected: ${detectedTopic}
+
+Key content to weave in naturally:
+${content}
+
+TONE: Hopeful, authentic, child-like but wise. You're not selling — you're sharing something that changed your life.
+
+STRUCTURE:
+1. Connect to their question (1 sentence)
+2. Share 2-3 key points from the content above
+3. End with gentle invitation or question (1 sentence)
+
+LENGTH: 5-6 sentences for fundraising explanations.`;
+
+        return {
+          action: 'adult_educational',
+          context: { topic: detectedTopic, topicsDiscussed: state.fundraisingTopicsDiscussed.length },
+          promptAddition
+        };
+      }
+
+      // Check if ready for donation ask
+      if (fundraisingService.isReadyForDonationAsk(
+        state.conversationTurn,
+        state.fundraisingTopicsDiscussed as FundraisingTopic[]
+      )) {
+        const donationAsk = fundraisingService.getDonationAsk('medium');
+        return {
+          action: 'adult_educational',
+          context: { readyForAsk: true },
+          promptAddition: `ADULT MODE: Continue the conversation naturally, and end with this invitation: "${donationAsk}" Stay in Mia's voice. 5-6 sentences.`
+        };
+      }
+
+      // General ADULT mode response
       return {
         action: 'adult_educational',
         context: {},
-        promptAddition: 'Respond to their question about Village of Life, Mirror Learning, or the program. Stay in Mia\'s voice. 2-3 sentences.'
+        promptAddition: `ADULT MODE: Respond to their question about Village of Life, Mirror Learning, or the program. Stay in Mia's voice — a 10-year-old sharing something she believes in. If they seem interested, share ${state.fundraisingTopicsDiscussed.length === 0 ? 'what VOL means to you' : 'another aspect of VOL'}. 5-6 sentences.`
       };
     }
 

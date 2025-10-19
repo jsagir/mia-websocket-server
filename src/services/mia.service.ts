@@ -9,6 +9,7 @@ import { getContextService } from './context.service';
 import { getStoryArcsService } from './story-arcs.service';
 import { getAnchorsService } from './anchors.service';
 import { getRelationshipService } from './relationship.service';
+import { getFundraisingService } from './fundraising.service';
 
 /**
  * MIA Service - v4.0 Unified Context + Emotional-Narrative Framework
@@ -25,6 +26,7 @@ export class MIAService {
   private storyArcs = getStoryArcsService();
   private anchors = getAnchorsService();
   private relationship = getRelationshipService();
+  private fundraising = getFundraisingService();
 
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
