@@ -1,10 +1,11 @@
 import {
-  MIA_CORE_IDENTITY,
-  REFLECTION_BUFFER_TEMPLATE,
-  SCENARIO_MEMORY_HEADER
-} from '../prompts/mia-core-identity';
+  MIA_CORE_IDENTITY_V4,
+  REFLECTION_BUFFER_TEMPLATE_V4,
+  SCENARIO_MEMORY_HEADER_V4
+} from '../prompts/mia-core-identity-v4';
 import { DialogueState } from './dialogue.service';
 import { RetrievedScenario } from './scenario-retrieval.service';
+import { ContextState } from './context.service';
 import { logger } from '../utils/logger';
 
 /**
@@ -20,17 +21,21 @@ import { logger } from '../utils/logger';
 export class PromptAssemblerService {
 
   /**
-   * Assemble complete system prompt for Mia
+   * Assemble complete system prompt for Mia (v4.0)
    *
    * @param state - Current dialogue state (includes reflection buffer)
+   * @param contextState - Context from context service (v4.0)
    * @param retrievedScenarios - Scenarios retrieved from Pinecone
    * @param dialogueInstruction - Optional specific instruction from dialogue manager
+   * @param relationshipStage - Current relationship stage (v4.0)
    * @returns Complete system prompt string
    */
   assembleSystemPrompt(
     state: DialogueState,
+    contextState: ContextState,
     retrievedScenarios: RetrievedScenario[],
-    dialogueInstruction?: string
+    dialogueInstruction?: string,
+    relationshipStage?: string
   ): string {
 
     const parts: string[] = [];
@@ -53,21 +58,21 @@ DIALOGUE INSTRUCTIONS OVERRIDE ALL OTHER RULES.
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // PART 2: Always-In-Context Core Identity (~2K tokens)
+    // PART 2: Always-In-Context Core Identity v4.0 (~2K tokens)
     // ═══════════════════════════════════════════════════════════════
-    parts.push(MIA_CORE_IDENTITY);
+    parts.push(MIA_CORE_IDENTITY_V4);
 
     // ═══════════════════════════════════════════════════════════════
-    // PART 3: Reflection Buffer (Emotional State) (~200 tokens)
+    // PART 3: Reflection Buffer v4.0 (Emotional State + Context) (~300 tokens)
     // ═══════════════════════════════════════════════════════════════
-    const reflection = this.buildReflectionBuffer(state);
+    const reflection = this.buildReflectionBufferV4(state, contextState, relationshipStage || 'cautious');
     parts.push(reflection);
 
     // ═══════════════════════════════════════════════════════════════
     // PART 4: Retrieved Scenarios (Mia's Experiences) (~2-8K tokens)
     // ═══════════════════════════════════════════════════════════════
     if (retrievedScenarios.length > 0) {
-      const scenarioMemory = this.buildScenarioMemory(retrievedScenarios);
+      const scenarioMemory = this.buildScenarioMemoryV4(retrievedScenarios);
       parts.push(scenarioMemory);
     } else {
       logger.debug('📋 No scenarios retrieved - using core identity only');
@@ -80,9 +85,10 @@ DIALOGUE INSTRUCTIONS OVERRIDE ALL OTHER RULES.
 
     // Log prompt stats
     const estimatedTokens = Math.ceil(fullPrompt.length / 4); // rough estimate
-    logger.info(`📝 System prompt assembled:`);
-    logger.info(`   - Core Identity: ✓`);
-    logger.info(`   - Reflection Buffer: ✓ (${state.reflectionBuffer.emotionalState}, turn ${state.conversationTurn})`);
+    logger.info(`📝 System prompt assembled (v4.0):`);
+    logger.info(`   - Core Identity v4.0: ✓`);
+    logger.info(`   - Reflection Buffer v4.0: ✓ (${contextState.lastEmotion}, ${(contextState.lastIntensity * 100).toFixed(0)}%, safety=${contextState.safetyFlag})`);
+    logger.info(`   - Trust Level: ${contextState.trustLevel}/5 (${relationshipStage})`);
     logger.info(`   - Retrieved Scenarios: ${retrievedScenarios.length}`);
     logger.info(`   - Dialogue Instruction: ${dialogueInstruction ? '✓' : '—'}`);
     logger.info(`   - Estimated tokens: ~${estimatedTokens}`);
@@ -91,22 +97,30 @@ DIALOGUE INSTRUCTIONS OVERRIDE ALL OTHER RULES.
   }
 
   /**
-   * Build reflection buffer with current emotional state
+   * Build reflection buffer v4.0 with enhanced context
    */
-  private buildReflectionBuffer(state: DialogueState): string {
-    const buffer = REFLECTION_BUFFER_TEMPLATE
-      .replace('{emotional_state}', state.reflectionBuffer.emotionalState)
-      .replace('{current_topic}', state.reflectionBuffer.currentTopic || 'Getting to know each other')
-      .replace('{last_lesson}', state.reflectionBuffer.lastLessonApplied || 'None yet')
-      .replace('{turn_number}', state.conversationTurn.toString());
+  private buildReflectionBufferV4(
+    state: DialogueState,
+    contextState: ContextState,
+    relationshipStage: string
+  ): string {
+    const buffer = REFLECTION_BUFFER_TEMPLATE_V4
+      .replace('{emotional_state}', contextState.lastEmotion)
+      .replace('{emotional_intensity}', (contextState.lastIntensity * 100).toFixed(0))
+      .replace('{current_topic}', contextState.lastTopic || 'Getting to know each other')
+      .replace('{safety_flag}', contextState.safetyFlag ? 'TRUE' : 'FALSE')
+      .replace('{context_expiry}', contextState.contextExpiry.toString())
+      .replace('{trust_level}', contextState.trustLevel.toString())
+      .replace('{relationship_stage}', relationshipStage)
+      .replace('{anchor_used}', contextState.anchorUsed || 'None');
 
     return buffer;
   }
 
   /**
-   * Build scenario memory from retrieved scenarios
+   * Build scenario memory v4.0 from retrieved scenarios
    */
-  private buildScenarioMemory(scenarios: RetrievedScenario[]): string {
+  private buildScenarioMemoryV4(scenarios: RetrievedScenario[]): string {
     const scenarioTexts = scenarios.map((s, i) => `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MEMORY ${i + 1}: ${s.title}
@@ -122,7 +136,7 @@ ${s.questions.map((q, idx) => `${idx + 1}. ${q}`).join('\n')}
 What I learned: ${s.learningObjective}
     `.trim()).join('\n\n');
 
-    return SCENARIO_MEMORY_HEADER + '\n' + scenarioTexts;
+    return SCENARIO_MEMORY_HEADER_V4 + '\n' + scenarioTexts;
   }
 
   /**

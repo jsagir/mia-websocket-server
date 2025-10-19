@@ -4,15 +4,27 @@ import { DialogueState, dialogueManager } from './dialogue.service';
 import { getScenarioRetrievalService } from './scenario-retrieval.service';
 import { getPromptAssemblerService } from './prompt-assembler.service';
 import { getModelRouterService, ModelChoice } from './model-router.service';
+import { getGuardrailsService } from './guardrails.service';
+import { getContextService } from './context.service';
+import { getStoryArcsService } from './story-arcs.service';
+import { getAnchorsService } from './anchors.service';
+import { getRelationshipService } from './relationship.service';
 
 /**
- * MIA Service - In-Context Identity Architecture
+ * MIA Service - v4.0 Unified Context + Emotional-Narrative Framework
  */
 export class MIAService {
   private client: OpenAI;
   private scenarioRetriever = getScenarioRetrievalService();
   private promptAssembler = getPromptAssemblerService();
   private modelRouter = getModelRouterService();
+
+  // v4.0 Services
+  private guardrails = getGuardrailsService();
+  private contextService = getContextService();
+  private storyArcs = getStoryArcsService();
+  private anchors = getAnchorsService();
+  private relationship = getRelationshipService();
 
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -21,7 +33,7 @@ export class MIAService {
     }
 
     this.client = new OpenAI({ apiKey });
-    logger.info('✅ MIA Service initialized (In-Context Identity Architecture)');
+    logger.info('✅ MIA Service initialized (v4.0 Unified Framework)');
   }
 
   async sendMessage(params: {
@@ -36,12 +48,69 @@ export class MIAService {
     const { sessionId, message, conversationHistory, dialogueContext } = params;
 
     try {
-      logger.info(`📤 MIA REQUEST (Session: ${sessionId.substring(0, 8)}...)`);
+      logger.info(`📤 MIA REQUEST v4.0 (Session: ${sessionId.substring(0, 8)}...)`);
 
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 1: GUARDRAIL CHECK (v4.0)
+      // ═══════════════════════════════════════════════════════════════
+      const contextState = this.contextService.getContext(sessionId);
+      const guardrailResult = this.guardrails.check(message, contextState.safetyFlag);
+
+      logger.info(`🛡️ Intent: ${guardrailResult.intent}, Emotion: ${guardrailResult.detectedEmotion} (${(guardrailResult.emotionalIntensity * 100).toFixed(0)}%)`);
+
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 2: UPDATE CONTEXT (v4.0)
+      // ═══════════════════════════════════════════════════════════════
+      this.contextService.updateContext(
+        sessionId,
+        guardrailResult.detectedEmotion,
+        guardrailResult.emotionalIntensity,
+        guardrailResult.safetyFlag,
+        undefined, // topic will be set later
+        undefined  // anchor will be set if needed
+      );
+
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 3: GET RELATIONSHIP STAGE (v4.0)
+      // ═══════════════════════════════════════════════════════════════
+      const relationshipStage = this.contextService.getRelationshipStage(sessionId);
+      const relationshipTone = this.relationship.getTonePrompt(contextState.trustLevel);
+
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 4: SCENARIO RETRIEVAL
+      // ═══════════════════════════════════════════════════════════════
       const state: DialogueState = dialogueManager.getState(sessionId);
       const retrievedScenarios = await this.scenarioRetriever.retrieveScenarios(message, 3, 0.7);
-      const systemPrompt = this.promptAssembler.assembleSystemPrompt(state, retrievedScenarios, dialogueContext);
 
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 5: ASSEMBLE PROMPT (v4.0)
+      // ═══════════════════════════════════════════════════════════════
+      let finalDialogueContext = dialogueContext || '';
+
+      // Add relationship tone to dialogue context
+      if (relationshipTone) {
+        finalDialogueContext += `\n\n${relationshipTone}`;
+      }
+
+      // Add sensory anchor if needed (high intensity emotions)
+      if (this.anchors.shouldUseAnchor(guardrailResult.detectedEmotion, guardrailResult.emotionalIntensity)) {
+        const anchorPrompt = this.anchors.getAnchorPrompt(guardrailResult.detectedEmotion, guardrailResult.emotionalIntensity);
+        if (anchorPrompt) {
+          finalDialogueContext += `\n\n${anchorPrompt}`;
+        }
+      }
+
+      const systemPrompt = this.promptAssembler.assembleSystemPrompt(
+        state,
+        contextState,
+        retrievedScenarios,
+        finalDialogueContext,
+        relationshipStage
+      );
+
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 6: MODEL ROUTING & GENERATION
+      // ═══════════════════════════════════════════════════════════════
       const modelChoice = this.modelRouter.route({
         userMessage: message,
         conversationMode: state.currentMode,
@@ -50,8 +119,21 @@ export class MIAService {
       });
 
       const response = await this.generateResponse(systemPrompt, conversationHistory, message, modelChoice);
+
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 7: UPDATE REFLECTION BUFFER
+      // ═══════════════════════════════════════════════════════════════
       dialogueManager.updateReflectionBuffer(sessionId, message, response);
 
+      // ═══════════════════════════════════════════════════════════════
+      // STEP 8: INCREMENT TRUST IF APPROPRIATE
+      // ═══════════════════════════════════════════════════════════════
+      const positiveInteraction = !guardrailResult.safetyFlag && !guardrailResult.inappropriateContent;
+      if (this.relationship.shouldIncrementTrust(contextState.trustLevel, state.conversationTurn, positiveInteraction)) {
+        this.contextService.incrementTrust(sessionId);
+      }
+
+      logger.info(`✅ MIA RESPONSE generated (${response.length} chars)`);
       return response;
     } catch (error) {
       logger.error('❌ MIA Service Error:', error);
