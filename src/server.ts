@@ -107,11 +107,15 @@ io.on('connection', (socket: AuthenticatedSocket) => {
       const mode = miaService.detectMode(message, currentAge);
       sessionService.updateMode(session.sessionId, mode);
 
-      // 🎭 DIALOGUE MANAGER: Process message for scenario-driven conversation
-      const dialogueAction = dialogueManager.processMessage(
+      // Get conversation history BEFORE dialogue processing (needed for Pinecone)
+      const history = sessionService.getHistory(session.sessionId);
+
+      // 🎭 DIALOGUE MANAGER: Process message for scenario-driven conversation (async with Pinecone)
+      const dialogueAction = await dialogueManager.processMessage(
         session.sessionId,
         message,
-        currentAge
+        currentAge,
+        history // ⭐ Pass history for Pinecone semantic search
       );
 
       logger.info(`🎭 Dialogue Action: ${dialogueAction.action}, Context:`, dialogueAction.context);
@@ -123,9 +127,6 @@ io.on('connection', (socket: AuthenticatedSocket) => {
         context: dialogueAction.context,
         progress: dialogueManager.getProgress(session.sessionId)
       });
-
-      // Get conversation history
-      const history = sessionService.getHistory(session.sessionId);
 
       // Send message to Mia with dialogue-driven prompt addition
       const stream = await miaService.sendMessage({

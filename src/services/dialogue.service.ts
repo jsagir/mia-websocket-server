@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger';
+import { pineconeScenarioMatcher } from './pinecone.service';
 
 // Scenario definition
 export interface Scenario {
@@ -462,16 +463,43 @@ export class DialogueManager {
     return 'casual_chat';
   }
 
-  // Select scenario based on conversation context ONLY (not age)
-  selectScenario(age: number | null, lastIntent: string, completedScenarios: string[]): Scenario | null {
-    // ⭐ NO AGE FILTERING - all scenarios available regardless of age
+  // Select scenario based on conversation context using Pinecone semantic search
+  async selectScenario(
+    age: number | null,
+    lastIntent: string,
+    completedScenarios: string[],
+    conversationHistory: Array<{ role: string; content: string }>
+  ): Promise<Scenario | null> {
+    // ⭐ TRY PINECONE FIRST for semantic matching
+    if (pineconeScenarioMatcher.isEnabled()) {
+      logger.info('🔍 Attempting Pinecone semantic search...');
+
+      const pineconeScenario = await pineconeScenarioMatcher.findBestScenario(
+        conversationHistory,
+        completedScenarios,
+        age,
+        lastIntent
+      );
+
+      if (pineconeScenario) {
+        logger.info(`✅ Pinecone found scenario: ${pineconeScenario.id} - "${pineconeScenario.title}"`);
+        return pineconeScenario;
+      }
+
+      logger.warn('⚠️ Pinecone returned no match - falling back to context-based selection');
+    }
+
+    // ⭐ FALLBACK: Context-based selection (original logic)
+    logger.info('📋 Using context-based scenario selection (fallback)');
+
+    // NO AGE FILTERING - all scenarios available regardless of age
     const availableScenarios = SCENARIO_BANK.filter(s =>
       !completedScenarios.includes(s.id)
     );
 
     if (availableScenarios.length === 0) return null;
 
-    // ⭐ CONTEXT-AWARE: Match scenario to conversation intent/topic
+    // CONTEXT-AWARE: Match scenario to conversation intent/topic
     let filteredScenarios = availableScenarios;
 
     if (lastIntent === 'medicine_topic' || lastIntent === 'substance_concern') {
@@ -492,15 +520,18 @@ export class DialogueManager {
     if (filteredScenarios.length === 0) filteredScenarios = availableScenarios;
 
     // Return random scenario from context-filtered list
-    return filteredScenarios[Math.floor(Math.random() * filteredScenarios.length)];
+    const selected = filteredScenarios[Math.floor(Math.random() * filteredScenarios.length)];
+    logger.info(`📋 Fallback selected: ${selected.id} - "${selected.title}"`);
+
+    return selected;
   }
 
   // Process user message and return dialogue action
-  processMessage(sessionId: string, message: string, userAge: number | null): {
+  async processMessage(sessionId: string, message: string, userAge: number | null, conversationHistory: Array<{ role: string; content: string }>): Promise<{
     action: string;
     context: any;
     promptAddition: string;
-  } {
+  }> {
     const state = this.getState(sessionId);
     state.conversationTurn++;
 
@@ -576,7 +607,7 @@ export class DialogueManager {
 
     // ⭐ MIRROR LEARNING is the default flow
     if (state.currentMode === 'MIRROR_LEARNING') {
-      return this.handleMirrorLearning(state, intent, message);
+      return await this.handleMirrorLearning(state, intent, message, conversationHistory);
     }
 
     // ⭐ Handle other explicit modes (URGENCY, FUNDRAISING, EDUCATIONAL)
@@ -599,11 +630,11 @@ export class DialogueManager {
     };
   }
 
-  private handleMirrorLearning(state: DialogueState, intent: string, message: string): {
+  private async handleMirrorLearning(state: DialogueState, intent: string, message: string, conversationHistory: Array<{ role: string; content: string }>): Promise<{
     action: string;
     context: any;
     promptAddition: string;
-  } {
+  }> {
     // ⭐ GATE: Don't trigger scenarios until user has responded to VOL question
     if (!state.hasAskedAboutVOL || state.conversationTurn <= 3) {
       logger.info(`🎭 Not ready for scenarios yet (turn ${state.conversationTurn}, askedVOL: ${state.hasAskedAboutVOL})`);
@@ -637,7 +668,7 @@ export class DialogueManager {
         };
       }
 
-      const scenario = this.selectScenario(state.userAge, state.lastIntent, state.scenariosCompleted);
+      const scenario = await this.selectScenario(state.userAge, state.lastIntent, state.scenariosCompleted, conversationHistory);
 
       if (!scenario) {
         return {
