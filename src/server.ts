@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { authenticateSocket, AuthenticatedSocket } from './middleware/auth';
 import { sessionService } from './services/session.service';
 import { miaService } from './services/mia.service';
+import { dialogueManager } from './services/dialogue.service';
 import { logger } from './utils/logger';
 
 // Load environment variables
@@ -106,15 +107,33 @@ io.on('connection', (socket: AuthenticatedSocket) => {
       const mode = miaService.detectMode(message, currentAge);
       sessionService.updateMode(session.sessionId, mode);
 
+      // 🎭 DIALOGUE MANAGER: Process message for scenario-driven conversation
+      const dialogueAction = dialogueManager.processMessage(
+        session.sessionId,
+        message,
+        currentAge
+      );
+
+      logger.info(`🎭 Dialogue Action: ${dialogueAction.action}, Context:`, dialogueAction.context);
+
+      // Emit dialogue state to client for debugging
+      socket.emit('dialogue_state', {
+        sessionId: session.sessionId,
+        action: dialogueAction.action,
+        context: dialogueAction.context,
+        progress: dialogueManager.getProgress(session.sessionId)
+      });
+
       // Get conversation history
       const history = sessionService.getHistory(session.sessionId);
 
-      // Send message to Mia and stream response
+      // Send message to Mia with dialogue-driven prompt addition
       const stream = await miaService.sendMessage({
         userId,
         sessionId: session.sessionId,
         message,
         conversationHistory: history,
+        dialogueContext: dialogueAction.promptAddition, // ⭐ Guide GPT-4o's response
       });
 
       let fullResponse = '';

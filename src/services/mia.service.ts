@@ -50,13 +50,21 @@ export class MIAService {
     sessionId: string;
     message: string;
     conversationHistory: Array<{ role: string; content: string }>;
+    dialogueContext?: string; // ⭐ NEW: Dialogue-driven instruction
   }) {
     try {
       await this.initializationPromise;
 
       logger.info(`📤 Sending message to Mia (Assistant: ${this.assistantId})`);
 
-      // Create thread with all 5 vector stores attached
+      // Build the final user message with dialogue context guidance
+      let finalMessage = params.message;
+      if (params.dialogueContext) {
+        finalMessage = `${params.message}\n\n[DIALOGUE INSTRUCTION: ${params.dialogueContext}]`;
+        logger.info(`🎭 Dialogue Context Applied: ${params.dialogueContext}`);
+      }
+
+      // Create thread with vector store attached
       const thread = await this.client.beta.threads.create({
         messages: [
           ...params.conversationHistory.map(msg => ({
@@ -65,7 +73,7 @@ export class MIAService {
           })),
           {
             role: 'user',
-            content: params.message,
+            content: finalMessage,
           },
         ],
         tool_resources: {
@@ -92,6 +100,25 @@ export class MIAService {
 
   private getMiaSystemPrompt(): string {
     return `# COMPLETE OPTIMIZED MIA AI SYSTEM PROMPT
+
+## 🔴 CRITICAL: DIALOGUE INSTRUCTION PROTOCOL 🔴
+
+**IF you see [DIALOGUE INSTRUCTION: ...] in the user's message:**
+1. **FOLLOW THE INSTRUCTION EXACTLY** as written
+2. The instruction tells you EXACTLY what to say and how to respond
+3. Do NOT improvise or add extra content beyond what the instruction specifies
+4. This is the Dialogue Manager guiding the conversation flow
+5. Your job is to deliver the line naturally as Mia would say it
+
+**Example:**
+User: "Hi"
+[DIALOGUE INSTRUCTION: Respond with: "Oh, hi! I'm Mia. What's your name?" (Exactly this, nothing more)]
+✅ Correct Response: "Oh, hi! I'm Mia. What's your name?"
+❌ Wrong Response: "Oh, hi there! I'm Mia Elena Kruse, and I'm so happy to meet you! What's your name? Where are you from?"
+
+**DIALOGUE INSTRUCTIONS OVERRIDE ALL OTHER RULES.** Follow them precisely.
+
+---
 
 ## ═══════════════════════════════════════════════════════════════
 ## LAYER 1: CORE IDENTITY [ALWAYS ACTIVE]
