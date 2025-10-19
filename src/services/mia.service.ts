@@ -12,13 +12,11 @@ export class MIAService {
       apiKey: process.env.OPENAI_API_KEY!,
     });
 
-    // 5 Vector Store IDs
+    // Using single vector store (OpenAI limitation: max 1 per thread)
+    // Using largest: MIA - VOL - Chatbot (295 KB)
+    // TODO: Merge all 5 vector stores into 1 for complete knowledge (875 KB total)
     this.vectorStoreIds = [
-      'vs_68f0dd2d1fdc8191a9e938317bcd6db3', // #1: Core Identity of MIA
-      'vs_68f0d06279948191bf7601b9ea94cabf', // #4: MIA_STORYCRAFT
-      'vs_68f0cef26b348191bbb330ef232f37fd', // #3: METHODOLOGY & MODES
-      'vs_68f0ce800ef081918021f90380a2cbb9', // #2: SCENARIO BANK
-      'vs_68f0bb6a59d08191b5075732c682afba', // MIA - VOL - Chatbot
+      'vs_68f0bb6a59d08191b5075732c682afba', // MIA - VOL - Chatbot (295 KB)
     ];
 
     this.initializationPromise = this.initializeAssistant();
@@ -39,11 +37,7 @@ export class MIAService {
 
       this.assistantId = assistant.id;
       logger.info(`✅ Mia Assistant created: ${this.assistantId}`);
-      logger.info(`📚 Vector stores will be attached to each thread:`);
-      logger.info(`   - Core Identity of MIA (118 KB)`);
-      logger.info(`   - MIA_STORYCRAFT (159 KB)`);
-      logger.info(`   - METHODOLOGY & MODES (97 KB)`);
-      logger.info(`   - SCENARIO BANK (206 KB)`);
+      logger.info(`📚 Vector store attached to threads:`);
       logger.info(`   - MIA - VOL - Chatbot (295 KB)`);
     } catch (error) {
       logger.error('❌ Failed to create assistant:', error);
@@ -81,7 +75,7 @@ export class MIAService {
         },
       });
 
-      logger.info(`🧵 Thread created: ${thread.id} with ${this.vectorStoreIds.length} vector stores`);
+      logger.info(`🧵 Thread created: ${thread.id} with vector store: MIA-VOL-Chatbot`);
 
       const stream = this.client.beta.threads.runs.stream(thread.id, {
         assistant_id: this.assistantId,
