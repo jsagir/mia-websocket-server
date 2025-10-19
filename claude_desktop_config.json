@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "pinecone": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@pinecone-database/mcp"
+      ],
+      "env": {
+        "PINECONE_API_KEY": "pcsk_6gwQTp_EFAHCwcvw1gCcJd2BL6vZB8y81WX2cF6amYET9Km8pwr9zY5YcdmGdUzPXkhvS3"
+      }
+    },
+    "upstash": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/mcp-server",
+        "run",
+        "jsagir@gmail.com",
+        "1bc2a48e-1b92-441f-b7a8-285feac73ff8"
+      ]
+    }
+  }
+}

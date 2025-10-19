@@ -28,10 +28,21 @@ export interface DialogueState {
   hasAskedAboutVOL: boolean; // ⭐ Track if we asked about Village of Life
   userName: string | null;
   userAge: number | null;
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🆕 REFLECTION BUFFER (In-Context Identity Architecture)
+  // ═══════════════════════════════════════════════════════════════
+  // Tracks emotional state and topic across conversation turns
+  // Updated after each message to maintain consistency
+  reflectionBuffer: {
+    emotionalState: 'curious' | 'anxious' | 'calm' | 'scared' | 'excited' | 'confused' | 'neutral';
+    currentTopic: string;
+    lastLessonApplied: string | null;
+  };
 }
 
 // Scenario Bank - 24 scenarios across 6 lessons
-const SCENARIO_BANK: Scenario[] = [
+export const SCENARIO_BANK: Scenario[] = [
   // LESSON 1: WELLNESS
   {
     id: 'L1-1',
@@ -427,7 +438,13 @@ export class DialogueManager {
         hasAskedAge: false,
         hasAskedAboutVOL: false, // ⭐ Track VOL question
         userName: null,
-        userAge: null
+        userAge: null,
+        // 🆕 Initialize reflection buffer
+        reflectionBuffer: {
+          emotionalState: 'neutral',
+          currentTopic: 'Getting to know each other',
+          lastLessonApplied: null
+        }
       });
     }
     return this.states.get(sessionId)!;
@@ -931,6 +948,75 @@ export class DialogueManager {
       total,
       percentage: Math.round((completed / total) * 100)
     };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🆕 REFLECTION BUFFER MANAGEMENT (In-Context Identity Architecture)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Update reflection buffer after each conversation turn
+   * Extracts emotional state and topic from user/assistant messages
+   *
+   * @param sessionId - Session identifier
+   * @param userMessage - User's message
+   * @param miaResponse - Mia's response
+   */
+  updateReflectionBuffer(
+    sessionId: string,
+    userMessage: string,
+    miaResponse: string
+  ): void {
+    const state = this.getState(sessionId);
+
+    // Extract emotional state from Mia's response
+    const emotionalKeywords: Record<string, RegExp> = {
+      scared: /scared|afraid|terrified|nervous|frightened/i,
+      anxious: /worried|anxious|stressed|uncertain|concerned/i,
+      calm: /okay|fine|good|peaceful|relaxed/i,
+      excited: /excited|happy|awesome|cool|amazing/i,
+      confused: /confused|don'?t get it|don'?t understand|unclear/i,
+      curious: /wonder|curious|interesting|hmm|maybe/i
+    };
+
+    // Check Mia's response for emotional keywords
+    for (const [emotion, regex] of Object.entries(emotionalKeywords)) {
+      if (regex.test(miaResponse)) {
+        state.reflectionBuffer.emotionalState = emotion as any;
+        break;
+      }
+    }
+
+    // Extract topic from recent conversation
+    const topicKeywords: Record<string, RegExp> = {
+      'medicine': /medicine|pill|medication|prescription|drug/i,
+      'peer_pressure': /friend|pressure|everyone|party|offered/i,
+      'safety': /danger|unsafe|scary|911|emergency/i,
+      'label_reading': /label|bottle|warning|dosage|instructions/i,
+      'help_seeking': /help|tell|adult|grandma|teacher/i,
+      'wellness': /sick|hurt|doctor|nurse|hospital/i,
+      'decision_making': /choose|decision|should|what if/i,
+      'VOL_discussion': /village of life|VOL|station|pharmacy|wellness/i
+    };
+
+    // Check both user message and Mia's response for topics
+    const combinedText = `${userMessage} ${miaResponse}`;
+    for (const [topic, regex] of Object.entries(topicKeywords)) {
+      if (regex.test(combinedText)) {
+        state.reflectionBuffer.currentTopic = topic;
+        break;
+      }
+    }
+
+    // Track which lesson was applied (if scenario active)
+    if (state.currentScenario) {
+      state.reflectionBuffer.lastLessonApplied = `L${state.currentScenario.lesson}`;
+    }
+
+    logger.info(`🧩 Reflection Buffer Updated:`);
+    logger.info(`   Emotional State: ${state.reflectionBuffer.emotionalState}`);
+    logger.info(`   Current Topic: ${state.reflectionBuffer.currentTopic}`);
+    logger.info(`   Last Lesson: ${state.reflectionBuffer.lastLessonApplied || 'None'}`);
   }
 }
 

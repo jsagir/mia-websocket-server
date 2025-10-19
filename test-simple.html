@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mia Test - Age Detection & Pinecone Scenarios</title>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .status-bar {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .status-item {
+            font-size: 13px;
+            color: #6c757d;
+        }
+
+        .status-item strong {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .age-detected {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .age-unknown {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #fafbfc;
+        }
+
+        .message {
+            margin-bottom: 16px;
+            display: flex;
+            gap: 12px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .message.mia .message-avatar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message.user .message-avatar {
+            background: #28a745;
+            color: white;
+        }
+
+        .message.system .message-avatar {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            line-height: 1.5;
+        }
+
+        .message.mia .message-content {
+            background: white;
+            color: #333;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .message.user .message-content {
+            background: #667eea;
+            color: white;
+        }
+
+        .message.system .message-content {
+            background: #fff3cd;
+            color: #856404;
+            font-size: 13px;
+        }
+
+        .input-area {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .quick-tests {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .quick-test-btn {
+            padding: 6px 12px;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .quick-test-btn:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-group input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #dee2e6;
+            border-radius: 12px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .input-group input:focus {
+            border-color: #667eea;
+        }
+
+        .input-group button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .input-group button:hover {
+            transform: translateY(-2px);
+        }
+
+        .input-group button:active {
+            transform: translateY(0);
+        }
+
+        .clear-btn {
+            padding: 6px 12px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 8px;
+        }
+
+        .scenario-alert {
+            background: #d4edda;
+            color: #155724;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            font-weight: 600;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Mia AI Test Client</h1>
+            <p>Age Detection & Pinecone Scenario Testing</p>
+        </div>
+
+        <div class="status-bar">
+            <div style="display: flex; gap: 20px;">
+                <div class="status-item">
+                    <span class="status-badge" id="connection-status">Disconnected</span>
+                </div>
+                <div class="status-item">
+                    Age: <span class="status-badge age-unknown" id="age-status">Unknown</span>
+                </div>
+                <div class="status-item">
+                    Mode: <strong id="mode-status">-</strong>
+                </div>
+            </div>
+            <button class="clear-btn" onclick="clearChat()">🗑️ Clear</button>
+        </div>
+
+        <div class="messages" id="messages">
+            <div class="message system">
+                <div class="message-avatar">ℹ️</div>
+                <div class="message-content">
+                    <strong>Testing Instructions:</strong><br>
+                    1. Click "Start Test" or say "hi"<br>
+                    2. Give your name<br>
+                    3. Type just a number (e.g., "9" or "11") for age<br>
+                    4. After VOL question, say "tell me about medicine" to trigger Pinecone scenario
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="quick-tests">
+                <button class="quick-test-btn" onclick="sendQuick('hi')">▶️ Start Test</button>
+                <button class="quick-test-btn" onclick="sendQuick('sarah')">👤 Name: Sarah</button>
+                <button class="quick-test-btn" onclick="sendQuick('9')">👧 Age: 9</button>
+                <button class="quick-test-btn" onclick="sendQuick('11')">👦 Age: 11</button>
+                <button class="quick-test-btn" onclick="sendQuick('tell me about medicine')">💊 Medicine Topic</button>
+                <button class="quick-test-btn" onclick="sendQuick('tell me about drugs')">🚨 Drugs Topic</button>
+                <button class="quick-test-btn" onclick="sendQuick('peer pressure')">👥 Peer Pressure</button>
+            </div>
+            <div class="input-group">
+                <input type="text" id="message-input" placeholder="Type a message..." onkeypress="handleKeyPress(event)">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const SERVER_URL = 'https://mia-websocket-server-production.up.railway.app';
+
+        let socket;
+        let sessionId;
+        let detectedAge = null;
+        let currentMode = 'GREETING';
+
+        // Connect to server
+        function connect() {
+            socket = io(SERVER_URL, {
+                transports: ['websocket', 'polling']
+            });
+
+            socket.on('connect', () => {
+                console.log('✅ Connected to server');
+                updateConnectionStatus(true);
+            });
+
+            socket.on('disconnect', () => {
+                console.log('❌ Disconnected from server');
+                updateConnectionStatus(false);
+            });
+
+            socket.on('session_created', (data) => {
+                sessionId = data.sessionId;
+                currentMode = data.mode;
+                console.log('✅ Session created:', sessionId);
+                updateModeStatus(currentMode);
+                addSystemMessage(`Session created! Mode: ${currentMode}`);
+            });
+
+            socket.on('message', (data) => {
+                console.log('📨 Message from Mia:', data.content);
+                addMiaMessage(data.content);
+            });
+
+            socket.on('age_detected', (data) => {
+                detectedAge = data.age;
+                console.log('🎂 Age detected:', detectedAge);
+                updateAgeStatus(detectedAge);
+                addSystemMessage(`Age detected: ${detectedAge} years old`);
+            });
+
+            socket.on('mode_changed', (data) => {
+                currentMode = data.mode;
+                console.log('🔄 Mode changed:', currentMode);
+                updateModeStatus(currentMode);
+            });
+
+            socket.on('dialogue_state', (data) => {
+                console.log('🎭 Dialogue state:', data);
+                if (data.action && data.action.includes('scenario')) {
+                    addSystemMessage(`🎯 Scenario triggered! Check Railway logs for Pinecone details.`);
+                }
+            });
+
+            socket.on('error', (error) => {
+                console.error('❌ Error:', error);
+                addSystemMessage(`Error: ${error.message || 'Unknown error'}`);
+            });
+        }
+
+        // UI Updates
+        function updateConnectionStatus(connected) {
+            const badge = document.getElementById('connection-status');
+            badge.textContent = connected ? 'Connected' : 'Disconnected';
+            badge.className = 'status-badge ' + (connected ? 'connected' : 'disconnected');
+        }
+
+        function updateAgeStatus(age) {
+            const badge = document.getElementById('age-status');
+            if (age) {
+                badge.textContent = `${age} years`;
+                badge.className = 'status-badge age-detected';
+            } else {
+                badge.textContent = 'Unknown';
+                badge.className = 'status-badge age-unknown';
+            }
+        }
+
+        function updateModeStatus(mode) {
+            document.getElementById('mode-status').textContent = mode;
+        }
+
+        // Messages
+        function addMessage(type, content) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = type === 'mia' ? '🤖' : type === 'user' ? '👤' : 'ℹ️';
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(contentDiv);
+            messagesDiv.appendChild(messageDiv);
+
+            // Scroll to bottom
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function addUserMessage(content) {
+            addMessage('user', content);
+        }
+
+        function addMiaMessage(content) {
+            addMessage('mia', content);
+        }
+
+        function addSystemMessage(content) {
+            addMessage('system', content);
+        }
+
+        // Send message
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            addUserMessage(message);
+
+            socket.emit('message', {
+                sessionId: sessionId,
+                message: message
+            });
+
+            input.value = '';
+        }
+
+        function sendQuick(message) {
+            document.getElementById('message-input').value = message;
+            sendMessage();
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        function clearChat() {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = '';
+            addSystemMessage('Chat cleared. Start a new test by clicking "Start Test"');
+            detectedAge = null;
+            updateAgeStatus(null);
+        }
+
+        // Initialize
+        connect();
+    </script>
+</body>
+</html>

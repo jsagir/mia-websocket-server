@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mia AI Companion - Test Interface</title>
+  <title>Mia AI Companion - Railway Production</title>
   <style>
     * {
       margin: 0;
@@ -408,6 +408,18 @@
       display: flex;
     }
 
+    .env-badge {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: #10b981;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
     @media (max-width: 768px) {
       .container {
         grid-template-columns: 1fr;
@@ -511,7 +523,7 @@
         <div class="avatar">🎭</div>
         <div class="header-info">
           <h1>Mia Elena Kruse</h1>
-          <p>AI Companion - Railway Production</p>
+          <p>AI Companion - Railway Production Server</p>
         </div>
         <div class="status-indicator" id="statusIndicator"></div>
       </div>
@@ -562,14 +574,15 @@
     let sessionId = null;
     let isTyping = false;
 
+    // Railway Production Server URL
+    const RAILWAY_SERVER_URL = 'https://mia-websocket-server-production.up.railway.app';
+
     // Connect to WebSocket server
     function connectWebSocket() {
-      const serverUrl = 'https://mia-websocket-server-production.up.railway.app';
-
-      console.log('Attempting to connect to:', serverUrl);
+      console.log('Attempting to connect to Railway Production:', RAILWAY_SERVER_URL);
       addSystemMessage('Connecting to Railway production server...');
 
-      socket = io(serverUrl, {
+      socket = io(RAILWAY_SERVER_URL, {
         transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionDelay: 1000,
@@ -619,7 +632,6 @@
           isTyping = true;
           showTypingIndicator();
         }
-        // Handle streaming chunks if needed
         console.log('Chunk:', data.chunk);
       });
 
@@ -852,7 +864,7 @@
       updateButtonState(false);
       updateConnectionStatus(false);
 
-      // Connect to server
+      // Connect to Railway server
       connectWebSocket();
     });
   </script>

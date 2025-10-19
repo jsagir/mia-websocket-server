@@ -130,56 +130,27 @@ io.on('connection', (socket: AuthenticatedSocket) => {
       });
 
       // Send message to Mia with dialogue-driven prompt addition
-      const stream = await miaService.sendMessage({
+      logger.info(`📝 Mia is responding...`);
+
+      const fullResponse = await miaService.sendMessage({
         userId,
         sessionId: session.sessionId,
         message,
         conversationHistory: history,
-        dialogueContext: dialogueAction.promptAddition, // ⭐ Guide GPT-4o's response
-        age: currentAge || undefined, // ⭐ Pass age for context-based Pinecone routing
-        mode: mode || undefined, // ⭐ Pass mode for context-based Pinecone routing
+        dialogueContext: dialogueAction.promptAddition,
+        age: currentAge || undefined,
+        mode: mode || undefined,
       });
 
-      let fullResponse = '';
+      logger.info(`✅ Response complete (${fullResponse.length} chars)`);
 
-      stream
-        .on('textCreated', () => {
-          logger.info(`📝 Mia is responding...`);
-        })
-        .on('textDelta', (textDelta) => {
-          const content = textDelta.value || '';
-          if (content) {
-            fullResponse += content;
-            socket.emit('message_chunk', {
-              sessionId: session.sessionId,
-              chunk: content,
-            });
-          }
-        })
-        .on('textDone', async () => {
-          logger.info(`✅ Response complete (${fullResponse.length} chars)`);
+      await sessionService.addMessage(session.sessionId, 'assistant', fullResponse);
 
-          await sessionService.addMessage(
-            session.sessionId,
-            'assistant',
-            fullResponse
-          );
+      socket.emit('message_complete', {
+        sessionId: session.sessionId,
+        message: fullResponse,
+      });
 
-          socket.emit('message_complete', {
-            sessionId: session.sessionId,
-            message: fullResponse,
-          });
-
-          logger.info(`Completed message streaming for session ${session.sessionId}`);
-        })
-        .on('error', (error) => {
-          logger.error('❌ Stream error:', error);
-          socket.emit('error', {
-            sessionId: session.sessionId,
-            message: 'Stream error occurred',
-            error: error.message,
-          });
-        });
     } catch (error) {
       logger.error(`Error processing message: ${error}`);
       socket.emit('error', {
