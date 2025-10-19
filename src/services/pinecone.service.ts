@@ -1,35 +1,43 @@
 import { Pinecone } from '@pinecone-database/pinecone';
-import OpenAI from 'openai';
+import { HfInference } from '@huggingface/inference';
 import { logger } from '../utils/logger';
 import { Scenario } from './dialogue.service';
 
 export class PineconeScenarioMatcher {
   private pinecone: Pinecone | null = null;
-  private openai: OpenAI | null = null;
+  private hf: HfInference | null = null;
   private indexName: string;
   private namespace: string;
+  private embeddingModel: string = 'intfloat/multilingual-e5-large'; // 1024 dimensions
   private isInitialized: boolean = false;
 
   constructor() {
-    const apiKey = process.env.PINECONE_API_KEY;
-    this.indexName = process.env.PINECONE_INDEX_NAME || 'mia-scenarios';
+    const pineconeApiKey = process.env.PINECONE_API_KEY;
+    const hfToken = process.env.HF_TOKEN;
+
+    this.indexName = process.env.PINECONE_INDEX_NAME || 'mia-scenarios-knowledge-base';
     this.namespace = process.env.PINECONE_NAMESPACE || '';
 
-    if (!apiKey) {
+    if (!pineconeApiKey) {
       logger.warn('⚠️ PINECONE_API_KEY not set - semantic search disabled');
       this.isInitialized = false;
       return;
     }
 
+    if (!hfToken) {
+      logger.warn('⚠️ HF_TOKEN not set - semantic search disabled');
+      this.isInitialized = false;
+      return;
+    }
+
     this.pinecone = new Pinecone({
-      apiKey: apiKey,
+      apiKey: pineconeApiKey,
     });
 
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY!,
-    });
+    this.hf = new HfInference(hfToken);
 
     logger.info(`🔍 Pinecone initialized: Index="${this.indexName}", Namespace="${this.namespace || 'default'}"`);
+    logger.info(`🤗 Hugging Face initialized: Model="${this.embeddingModel}" (1024 dimensions)`);
     this.isInitialized = true;
   }
 
@@ -123,19 +131,37 @@ export class PineconeScenarioMatcher {
   }
 
   /**
-   * Embed text using OpenAI's embedding model
+   * Embed text using Hugging Face multilingual-e5-large model
    */
   private async embedText(text: string): Promise<number[]> {
-    if (!this.openai) {
-      throw new Error('OpenAI client not initialized');
+    if (!this.hf) {
+      throw new Error('Hugging Face client not initialized');
     }
 
-    const response = await this.openai.embeddings.create({
-      model: 'text-embedding-3-small', // 1536 dimensions, fast and cheap
-      input: text,
-    });
+    try {
+      // Use feature extraction endpoint for embeddings
+      const response = await this.hf.featureExtraction({
+        model: this.embeddingModel,
+        inputs: text,
+      });
 
-    return response.data[0].embedding;
+      // Response is already an array of numbers (embedding vector)
+      if (Array.isArray(response) && typeof response[0] === 'number') {
+        logger.info(`🤗 Generated embedding: ${response.length} dimensions`);
+        return response as number[];
+      }
+
+      // Handle nested array format
+      if (Array.isArray(response) && Array.isArray(response[0])) {
+        logger.info(`🤗 Generated embedding: ${(response[0] as number[]).length} dimensions`);
+        return response[0] as number[];
+      }
+
+      throw new Error('Unexpected embedding response format');
+    } catch (error) {
+      logger.error('❌ Hugging Face embedding error:', error);
+      throw error;
+    }
   }
 
   /**
