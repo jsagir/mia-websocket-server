@@ -458,7 +458,7 @@ Before sending EVERY response, verify:
 
   detectAge(message: string): number | null {
     const patterns = [
-      /i('m| am) (\d+)( years? old)?/i,
+      /i(?:'m|m| am) (\d+)( years? old)?/i,  // Matches "i'm 11", "im 11", or "i am 11"
       /(\d+) years? old/i,
       /age (is )?(\d+)/i,
       /turning (\d+)/i,
