@@ -17,15 +17,15 @@ export interface Scenario {
 // Dialogue state for each session
 export interface DialogueState {
   sessionId: string;
-  currentMode: 'GREETING' | 'MIRROR_LEARNING' | 'EDUCATIONAL' | 'FUNDRAISING' | 'URGENCY';
-  mirrorLearningStep: number; // 0-7 for the 7-step pattern
+  currentMode: 'GREETING' | 'CONTEXT_BASED' | 'ADULT';
+  teachingStep: number; // 0-7 for teaching patterns (Mirror Learning, etc.)
   currentScenario: Scenario | null;
   scenariosCompleted: string[];
   conversationTurn: number;
   lastIntent: string;
   hasAskedName: boolean;
   hasAskedAge: boolean;
-  hasAskedAboutVOL: boolean; // ⭐ NEW: Track if we asked about Village of Life
+  hasAskedAboutVOL: boolean; // ⭐ Track if we asked about Village of Life
   userName: string | null;
   userAge: number | null;
 }
@@ -417,15 +417,15 @@ export class DialogueManager {
     if (!this.states.has(sessionId)) {
       this.states.set(sessionId, {
         sessionId,
-        currentMode: 'MIRROR_LEARNING', // ⭐ ALWAYS start with Mirror Learning
-        mirrorLearningStep: 0,
+        currentMode: 'GREETING', // Start with greeting, then move to CONTEXT_BASED or ADULT based on age
+        teachingStep: 0,
         currentScenario: null,
         scenariosCompleted: [],
         conversationTurn: 0,
         lastIntent: 'greeting',
         hasAskedName: false,
         hasAskedAge: false,
-        hasAskedAboutVOL: false, // ⭐ NEW: Track VOL question
+        hasAskedAboutVOL: false, // ⭐ Track VOL question
         userName: null,
         userAge: null
       });
@@ -450,13 +450,13 @@ export class DialogueManager {
     if (!state.hasAskedName && /(my name is|i'm|call me)/i.test(lower)) return 'provide_name';
     if (!state.hasAskedAge && /(i'm \d+|i am \d+|\d+ years old|age is)/i.test(lower)) return 'provide_age';
 
-    // Mirror Learning responses
-    if (state.currentMode === 'MIRROR_LEARNING' && state.currentScenario) {
+    // Context-based teaching responses
+    if (state.currentMode === 'CONTEXT_BASED' && state.currentScenario) {
       if (/(yes|yeah|yep|no|nope|should|would|could)/i.test(lower)) return 'ml_response';
     }
 
     // Scenario triggers
-    if (/(medicine|pills|sick|doctor)/i.test(lower)) return 'medicine_topic';
+    if (/(medicine|pills|sick|doctor|pharmacy|medication|prescription|label|dose|dosage|bottle|capsule|tablet)/i.test(lower)) return 'medicine_topic';
     if (/(friend|pressure|party|everyone)/i.test(lower)) return 'peer_pressure_topic';
     if (/(help|don't know|scared|afraid)/i.test(lower)) return 'needs_help';
 
@@ -539,7 +539,7 @@ export class DialogueManager {
     const intent = this.detectIntent(message, state);
     state.lastIntent = intent;
 
-    logger.info(`🎭 Session ${sessionId}: Intent="${intent}", Mode="${state.currentMode}", ML Step=${state.mirrorLearningStep}`);
+    logger.info(`🎭 Session ${sessionId}: Intent="${intent}", Mode="${state.currentMode}", Teaching Step=${state.teachingStep}`);
 
     // Handle greeting flow
     if (!state.hasAskedName) {
@@ -563,18 +563,31 @@ export class DialogueManager {
       };
     }
 
-    // Update user age if detected (informational only, doesn't change mode)
+    // Update user age if detected and set appropriate mode
     if (userAge && !state.userAge) {
       state.userAge = userAge;
-      state.hasAskedAboutVOL = true; // ⭐ Mark that we're asking about VOL
-      logger.info(`🎭 User age detected: ${userAge} (informational only)`);
 
-      // ⭐ STAY IN MIRROR_LEARNING - just acknowledge age and ask about VOL
-      return {
-        action: 'acknowledge_age',
-        context: { age: userAge, userName: state.userName },
-        promptAddition: `Respond with: "Hey ${state.userName}, did you just come from the Village of Life? Which station did you go to? I wanna know what you learned!" (Exactly this)`
-      };
+      // Set mode based on age
+      if (userAge >= 5 && userAge <= 17) {
+        state.currentMode = 'CONTEXT_BASED';
+        state.hasAskedAboutVOL = true; // Ask about VOL for kids/teens
+        logger.info(`🎭 User age detected: ${userAge} → CONTEXT_BASED mode`);
+
+        return {
+          action: 'acknowledge_age',
+          context: { age: userAge, userName: state.userName },
+          promptAddition: `Respond with: "Hey ${state.userName}, did you just come from the Village of Life? Which station did you go to? I wanna know what you learned!" (Exactly this)`
+        };
+      } else if (userAge >= 18) {
+        state.currentMode = 'ADULT';
+        logger.info(`🎭 User age detected: ${userAge} → ADULT mode`);
+
+        return {
+          action: 'acknowledge_age_adult',
+          context: { age: userAge, userName: state.userName },
+          promptAddition: `Acknowledge age briefly and ask: "Are you learning about the Village of Life program?" (2 sentences max)`
+        };
+      }
     }
 
     // ⭐ CRISIS always overrides everything
@@ -586,39 +599,34 @@ export class DialogueManager {
       };
     }
 
-    // ⭐ Handle EXPLICIT mode switches (user requests)
+    // ⭐ Handle special requests (urgency, fundraising) - available in all modes
     if (intent === 'urgency') {
-      state.currentMode = 'URGENCY';
       return {
-        action: 'urgency_mode',
+        action: 'urgency_response',
         context: {},
-        promptAddition: 'Respond with: "You wanna know why we can\'t wait?" Then briefly explain urgency (3 sentences max)'
+        promptAddition: 'Respond with: "You wanna know why we can\'t wait?" Then briefly explain urgency (3 sentences max, then return to normal conversation)'
       };
     }
 
-    if (intent === 'fundraising') {
-      state.currentMode = 'FUNDRAISING';
+    if (intent === 'fundraising' && state.currentMode === 'ADULT') {
       return {
-        action: 'fundraising_mode',
+        action: 'fundraising_response',
         context: {},
         promptAddition: 'Respond with: "Are you someone who might help build more Villages? I really hope so..." Then share impact stories (3 sentences max)'
       };
     }
 
-    // ⭐ MIRROR LEARNING is the default flow
-    if (state.currentMode === 'MIRROR_LEARNING') {
-      return await this.handleMirrorLearning(state, intent, message, conversationHistory);
+    // ⭐ CONTEXT_BASED MODE: Dynamic, scenario-driven teaching (ages 5-17)
+    if (state.currentMode === 'CONTEXT_BASED') {
+      return await this.handleContextBasedTeaching(state, intent, message, conversationHistory);
     }
 
-    // ⭐ Handle other explicit modes (URGENCY, FUNDRAISING, EDUCATIONAL)
-    // If in these modes, respond accordingly but allow return to Mirror Learning
-    if (state.currentMode === 'URGENCY' || state.currentMode === 'FUNDRAISING') {
-      // After one response, return to Mirror Learning
-      state.currentMode = 'MIRROR_LEARNING';
+    // ⭐ ADULT MODE: Educational content, fundraising, VOL explanation (ages 18+)
+    if (state.currentMode === 'ADULT') {
       return {
-        action: 'return_to_mirror_learning',
+        action: 'adult_educational',
         context: {},
-        promptAddition: 'Respond briefly to their question (2 sentences), then ask: "Do you have other questions about the Village of Life?"'
+        promptAddition: 'Respond to their question about Village of Life, Mirror Learning, or the program. Stay in Mia\'s voice. 2-3 sentences.'
       };
     }
 
@@ -630,7 +638,7 @@ export class DialogueManager {
     };
   }
 
-  private async handleMirrorLearning(state: DialogueState, intent: string, message: string, conversationHistory: Array<{ role: string; content: string }>): Promise<{
+  private async handleContextBasedTeaching(state: DialogueState, intent: string, message: string, conversationHistory: Array<{ role: string; content: string }>): Promise<{
     action: string;
     context: any;
     promptAddition: string;
@@ -657,7 +665,7 @@ export class DialogueManager {
     const shouldTriggerScenario = scenarioTriggerIntents.includes(intent);
 
     // If no current scenario, decide whether to initiate one
-    if (!state.currentScenario || state.mirrorLearningStep === 0) {
+    if (!state.currentScenario || state.teachingStep === 0) {
       // Only trigger scenario if user mentions relevant topic
       if (!shouldTriggerScenario) {
         logger.info(`🎭 Intent "${intent}" doesn't trigger scenarios - casual chat`);
@@ -679,7 +687,7 @@ export class DialogueManager {
       }
 
       state.currentScenario = scenario;
-      state.mirrorLearningStep = 1;
+      state.teachingStep = 1;
 
       logger.info(`🎭 Starting scenario ${scenario.id}: "${scenario.title}"`);
 
@@ -691,13 +699,13 @@ export class DialogueManager {
       };
     }
 
-    // Progress through Mirror Learning steps
+    // Progress through teaching steps (Mirror Learning pattern)
     const scenario = state.currentScenario;
 
-    switch (state.mirrorLearningStep) {
+    switch (state.teachingStep) {
       case 1:
         // Step 2: Dilemma
-        state.mirrorLearningStep = 2;
+        state.teachingStep = 2;
         return {
           action: 'ml_step_2_dilemma',
           context: { scenario: scenario.id, step: 2 },
@@ -714,7 +722,7 @@ export class DialogueManager {
             promptAddition: `React to their answer authentically (1 sentence), then ask: "${scenario.questions[questionIndex]}"`
           };
         } else {
-          state.mirrorLearningStep = 3;
+          state.teachingStep = 3;
           return {
             action: 'ml_step_5_react',
             context: { scenario: scenario.id, step: 5 },
@@ -724,7 +732,7 @@ export class DialogueManager {
 
       case 3:
         // Step 6: Apply teaching
-        state.mirrorLearningStep = 4;
+        state.teachingStep = 4;
         return {
           action: 'ml_step_6_apply',
           context: { scenario: scenario.id, step: 6 },
@@ -733,7 +741,7 @@ export class DialogueManager {
 
       case 4:
         // Step 7: Gratitude and complete
-        state.mirrorLearningStep = 0;
+        state.teachingStep = 0;
         state.scenariosCompleted.push(scenario.id);
         state.currentScenario = null;
 
@@ -746,7 +754,7 @@ export class DialogueManager {
         };
 
       default:
-        state.mirrorLearningStep = 0;
+        state.teachingStep = 0;
         state.currentScenario = null;
         return {
           action: 'casual_response',

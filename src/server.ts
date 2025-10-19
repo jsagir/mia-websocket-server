@@ -100,6 +100,7 @@ io.on('connection', (socket: AuthenticatedSocket) => {
       const detectedAge = miaService.detectAge(message);
       if (detectedAge !== null) {
         sessionService.updateAge(session.sessionId, detectedAge);
+        socket.emit('age_detected', { age: detectedAge });
       }
 
       // Detect and update mode
