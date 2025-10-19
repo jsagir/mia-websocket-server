@@ -214,6 +214,7 @@
     #sendBtn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
+      background: #9ca3af;
     }
 
     .sidebar h2 {
@@ -547,7 +548,8 @@
     </div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- Socket.IO Client Library -->
+  <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
   <script>
     let socket;
     let sessionId = null;
@@ -555,19 +557,36 @@
 
     // Connect to WebSocket server
     function connectWebSocket() {
-      socket = io('http://localhost:3000', {
-        transports: ['websocket']
+      const serverUrl = 'http://localhost:3000';
+
+      console.log('Attempting to connect to:', serverUrl);
+      addSystemMessage('Connecting to Mia server...');
+
+      socket = io(serverUrl, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 5
       });
 
       socket.on('connect', () => {
-        console.log('Connected to Mia server');
+        console.log('✅ Connected to Mia server');
         updateConnectionStatus(true);
-        addSystemMessage('Connected to Mia server');
+        updateButtonState(true);
+        addSystemMessage('✅ Connected to Mia server');
+      });
+
+      socket.on('connect_error', (error) => {
+        console.error('❌ Connection error:', error);
+        updateConnectionStatus(false);
+        updateButtonState(false);
+        addSystemMessage('❌ Connection failed. Is the server running on port 3000?', true);
       });
 
       socket.on('disconnect', () => {
         console.log('Disconnected from server');
         updateConnectionStatus(false);
+        updateButtonState(false);
         addSystemMessage('Disconnected from server');
       });
 
@@ -659,6 +678,23 @@
       }
     }
 
+    function updateButtonState(enabled) {
+      const sendBtn = document.getElementById('sendBtn');
+      const messageInput = document.getElementById('messageInput');
+
+      if (enabled) {
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        messageInput.disabled = false;
+        messageInput.placeholder = 'Type your message to Mia...';
+      } else {
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Disconnected';
+        messageInput.disabled = true;
+        messageInput.placeholder = 'Waiting for connection...';
+      }
+    }
+
     function addMessage(sender, text) {
       const messagesDiv = document.getElementById('messages');
       const messageDiv = document.createElement('div');
@@ -712,9 +748,26 @@
 
     function sendMessage() {
       const input = document.getElementById('messageInput');
+      const sendBtn = document.getElementById('sendBtn');
       const message = input.value.trim();
 
-      if (!message || !socket || !socket.connected) return;
+      // Check if button is disabled
+      if (sendBtn.disabled) {
+        addSystemMessage('❌ Please wait for connection to server', true);
+        return;
+      }
+
+      // Check if socket is connected
+      if (!socket || !socket.connected) {
+        addSystemMessage('❌ Not connected to server. Please wait...', true);
+        updateButtonState(false);
+        return;
+      }
+
+      // Check if message is empty
+      if (!message) {
+        return;
+      }
 
       addMessage('user', message);
 
@@ -782,12 +835,14 @@
       }
     });
 
-    // Initialize connection
-    connectWebSocket();
-
-    // Focus input on load
+    // Initialize on page load
     window.addEventListener('load', () => {
-      document.getElementById('messageInput').focus();
+      // Start with button disabled
+      updateButtonState(false);
+      updateConnectionStatus(false);
+
+      // Connect to server
+      connectWebSocket();
     });
   </script>
 </body>
