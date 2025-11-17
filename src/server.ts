@@ -7,6 +7,7 @@ import { authenticateSocket, AuthenticatedSocket } from './middleware/auth';
 import { sessionService } from './services/session.service';
 import { miaService } from './services/mia.service';
 import { dialogueManager } from './services/dialogue.service';
+import { getPWSAssistantService } from './services/pws-assistant.service';
 import { logger } from './utils/logger';
 
 // Load environment variables
@@ -51,6 +52,69 @@ app.post('/api/auth/token', (req, res) => {
 
   const token = sessionService.generateToken(userId);
   res.json({ token, userId });
+});
+
+// ========================================
+// PWS (Problems Worth Solving) Endpoints
+// ========================================
+
+// PWS health check
+app.get('/api/pws/health', async (req, res) => {
+  try {
+    const pwsAssistant = getPWSAssistantService();
+    const health = await pwsAssistant.getHealthStatus();
+    res.json(health);
+  } catch (error) {
+    res.status(500).json({
+      status: 'unhealthy',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// PWS quick query (simple question/answer)
+app.post('/api/pws/query', async (req, res) => {
+  try {
+    const { query } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+
+    const pwsAssistant = getPWSAssistantService();
+    const result = await pwsAssistant.generateResponse({ query });
+
+    res.json({
+      response: result.response,
+      citations: result.citations
+    });
+  } catch (error) {
+    logger.error('PWS query error:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to process query'
+    });
+  }
+});
+
+// PWS problem classification
+app.post('/api/pws/classify', async (req, res) => {
+  try {
+    const { problemDescription } = req.body;
+
+    if (!problemDescription) {
+      return res.status(400).json({ error: 'problemDescription is required' });
+    }
+
+    const pwsAssistant = getPWSAssistantService();
+    const classification = await pwsAssistant.classifyProblem(problemDescription);
+
+    res.json(classification);
+  } catch (error) {
+    logger.error('PWS classification error:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to classify problem'
+    });
+  }
 });
 
 // Apply authentication middleware to Socket.io
@@ -155,6 +219,65 @@ io.on('connection', (socket: AuthenticatedSocket) => {
       logger.error(`Error processing message: ${error}`);
       socket.emit('error', {
         message: 'Failed to process message',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // ========================================
+  // PWS (Problems Worth Solving) Handlers
+  // ========================================
+
+  // Handle PWS queries
+  socket.on('pws_query', async ({ query, sessionId, conversationHistory }) => {
+    try {
+      logger.info(`PWS Query from ${userId}: "${query.substring(0, 100)}..."`);
+
+      const pwsAssistant = getPWSAssistantService();
+
+      // Generate response with RAG
+      const result = await pwsAssistant.generateResponse({
+        query,
+        conversationHistory: conversationHistory || []
+      });
+
+      // Emit complete response
+      socket.emit('pws_response', {
+        sessionId,
+        response: result.response,
+        citations: result.citations,
+        timestamp: new Date().toISOString()
+      });
+
+      logger.info(`✅ PWS Response sent (${result.response.length} chars)`);
+    } catch (error) {
+      logger.error('PWS query error:', error);
+      socket.emit('pws_error', {
+        message: 'Failed to process PWS query',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Handle PWS problem classification
+  socket.on('pws_classify', async ({ problemDescription, sessionId }) => {
+    try {
+      logger.info(`PWS Classify from ${userId}`);
+
+      const pwsAssistant = getPWSAssistantService();
+      const classification = await pwsAssistant.classifyProblem(problemDescription);
+
+      socket.emit('pws_classification', {
+        sessionId,
+        classification,
+        timestamp: new Date().toISOString()
+      });
+
+      logger.info(`✅ PWS Classification sent`);
+    } catch (error) {
+      logger.error('PWS classification error:', error);
+      socket.emit('pws_error', {
+        message: 'Failed to classify problem',
         error: error instanceof Error ? error.message : 'Unknown error'
       });
     }
